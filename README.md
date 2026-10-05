@@ -1,14 +1,14 @@
 # advanced-logger
 
 Self-contained TypeScript port of the VOID `core.logging` package, for Playwright projects.
-No runtime dependencies other than `@playwright/test` (optional, only needed for the `advanced-logger/playwright` entry).
+No runtime dependencies other than `@playwright/test` (optional, only needed for the `@aryan-vashishth/advanced-logger/playwright` entry).
 
 Install it as a package (`npm install <path-or-git-url-to-this-repo>`), or copy `src/` directly into your own project (for example `src/logger/`) and import by relative path if you'd rather not take a dependency.
 
 ```ts
 // tests: import test/expect from the Playwright entry so every test is tagged, bannered and its log attached on failure
-import { test, expect } from 'advanced-logger/playwright';
-import { info, warn, error, fields } from 'advanced-logger';
+import { test, expect } from '@aryan-vashishth/advanced-logger/playwright';
+import { info, warn, error, fields } from '@aryan-vashishth/advanced-logger';
 
 info.click('Submit');
 info.log('Request', fields('method', 'POST'));
