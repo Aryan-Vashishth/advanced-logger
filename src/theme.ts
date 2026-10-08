@@ -7,6 +7,7 @@ import {
   RESET,
   RGB_FG,
 } from './ansi';
+import { config } from './config';
 
 /** Classifies what a line communicates, independent of level. Port of LogIntent. */
 export const LogIntent = {
@@ -50,8 +51,12 @@ const INTENT_FG: Record<Exclude<LogIntent, 'BASE'>, string> = {
 export const CALLER_FG = FG_BRIGHT_BLACK;
 export const THEME_RESET = RESET;
 
-/** intentFg + levelBg. */
+/**
+ * intentFg + levelBg, each part gated by config().fg / config().bg ('' when both are off).
+ * Independent of config().ansi: callers (themed()) decide whether any color is wanted at all.
+ */
 export function resolveStyle(level: LevelName, intent: LogIntent): string {
-  const fg = intent === 'BASE' ? LEVEL_FG[level] : INTENT_FG[intent];
-  return fg + BG;
+  const { fg: useFg, bg: useBg } = config();
+  const fg = useFg ? (intent === 'BASE' ? LEVEL_FG[level] : INTENT_FG[intent]) : '';
+  return fg + (useBg ? BG : '');
 }

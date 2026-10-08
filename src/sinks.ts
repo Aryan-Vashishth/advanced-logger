@@ -15,7 +15,7 @@ export interface LogEvent {
   label: string;
   /** Full message, may be multi-line. */
   message: string;
-  /** Resolved theme style (intentFg + levelBg). Ignored when ANSI is off. */
+  /** Resolved theme style (intentFg + levelBg, per the fg/bg toggles; '' when none). Ignored when ANSI is off. */
   color: string;
   /** Plain "Callee <- Caller" text, empty when unresolved. */
   caller: string;
@@ -60,10 +60,13 @@ export const consoleSink: Sink = {
       const first = i === 0 && callerText !== '';
       let text: string;
       if (cfg.ansi) {
+        // ev.color is '' when fg and bg are both off: leave the body bare rather than emit a lone reset.
+        const wrap = (s: string): string => (ev.color ? ev.color + s + THEME_RESET : s);
+        // callerColor is its own opt-in and is not gated by fg/bg (only ansi=false silences it).
         text =
           first && cfg.callerColor
-            ? ev.color + b + THEME_RESET + div + CALLER_FG + callerText + THEME_RESET
-            : ev.color + b + (first ? div + callerText : '') + THEME_RESET;
+            ? wrap(b) + div + CALLER_FG + callerText + THEME_RESET
+            : wrap(b + (first ? div + callerText : ''));
       } else {
         text = b + (first ? div + callerText : '');
       }

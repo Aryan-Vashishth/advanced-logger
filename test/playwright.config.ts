@@ -5,7 +5,7 @@ export default defineConfig({
   testMatch: '*.spec.ts',
   // Deliberately fails to demonstrate attach-on-failure; run it explicitly:
   // npx playwright test --config=test/playwright.failure-demo.config.ts
-  testIgnore: 'failure-demo.spec.ts',
+  testIgnore: ['failure-demo.spec.ts', 'fixtures/**'],
   workers: 2,
   fullyParallel: true,
   reporter: [['list']],

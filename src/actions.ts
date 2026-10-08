@@ -248,9 +248,10 @@ export class LogActions {
       }
     }
     const headers = [...widths.keys()];
-    const ansi = config().ansi;
-    const color = ansi ? themed(this.level, LogIntent.DATA) : '';
-    const rst = ansi ? RESET : '';
+    // themed() is '' when ansi is off or both fg and bg are off; the table's own bold/reset follow it.
+    const color = themed(this.level, LogIntent.DATA);
+    const styled = color !== '';
+    const rst = styled ? RESET : '';
     const w = (h: string): number => widths.get(h)!;
 
     const hBorder = '+' + headers.map((h) => '-'.repeat(w(h) + 2)).join('+') + '+';
@@ -258,8 +259,10 @@ export class LogActions {
 
     const out: string[] = [hBorder];
     if (title) {
-      const bold = ansi ? BOLD : '';
-      const resetBold = ansi ? RESET : '';
+      // Bold is part of the foreground style, so it follows fg (and the reset only exists to end the bold).
+      const titleStyled = styled && config().fg;
+      const bold = titleStyled ? BOLD : '';
+      const resetBold = titleStyled ? RESET : '';
       out.push('|' + bold + center(` ${title} `, headerRow.length - 2) + resetBold + '|');
       out.push(hBorder);
     }
