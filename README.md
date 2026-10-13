@@ -93,8 +93,8 @@ Files are written synchronously, one per Playwright worker (`...-w<index>.log`),
 
 ## Configuration
 
-Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
-Code: `configure({ level, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, attach, ... })`.
+Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
+Code: `configure({ level, infoLogsCharLimit, maxLogFiles, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, attach, ... })`.
 
 The single theme (HIGH_CONTRAST) is on when ANSI is on: `enableAnsi()` / `disableAnsi()`.
 
@@ -134,6 +134,31 @@ Notes:
 - An invalid `VOID_LOG_LEVEL` is ignored, so it never overrides the config file.
 - `NO_COLOR` and `FORCE_COLOR` count as environment variables, so they beat `ansi` in the file. Terminal auto-detection does not: the file beats it.
 
+### Limiting how many log files are kept: maxLogFiles
+
+`maxLogFiles: 20` (or `VOID_LOG_MAX_FILES=20`) keeps at most 20 files in each of `partial-trace`, `debug-trace`, `full-trace` and `jsonl`, counted across all date folders. Older files (by modification time) are deleted, and date folders left empty are removed. Unset, `null` or `0` keeps everything (the default; an env value of `0` turns off a limit set in the config file).
+
+- The unit is files, not runs. Each run writes one file per Playwright worker, so with 4 workers a limit of 20 holds about 5 runs.
+- Files of the current run are never deleted, because parallel workers share one run id. If a run has more workers than the limit, that run's files exceed it.
+- Cleanup runs once per process, per kind, right after the first write, and is best effort: a failure never reaches your test. Only files named like this logger's output (`<kind>-*.log` / `.jsonl`) are touched, so other files in the log folder are safe.
+
+### Truncating long INFO logs: infoLogsCharLimit
+
+`infoLogsCharLimit: 200` (or `VOID_LOG_INFO_LOGS_CHAR_LIMIT=200`) caps INFO log messages at 200 characters. When one is longer, three lines are logged:
+
+```
+INFO  │ xxxxxxxx... (259 chars)
+WARN  │ INFO log exceeded the 200 char threshold (259 chars). Refer to the debug logs to see the full text. To increase the limit, change infoLogsCharLimit in /path/to/logger.config.ts.
+DEBUG │ <the full 259 characters, no limit>
+```
+
+- The WARN also says where to raise the limit: the config file's full path when the value came from the file, the env var name when it came from the environment, or the `configure()` call when it was set in code.
+- Leave it unset, `null` or `0` for no limit (the default). An env value of `0` turns off a limit set in the config file.
+- A message of exactly the limit is not truncated. The count in `(N chars)` is the original length.
+- Applies to INFO only, and not to `table()` output (use `tableCellLimit` for that). Action lines keep their label (`CLICK [>]`) in all three lines.
+- Only applies when INFO is visible at the root `level`. When it is not, nothing is truncated or warned about, and the debug and full traces already hold the full text.
+- The full text is in `debug-trace` and `full-trace` files (they capture every level), and on the console when `level` is `debug`. `partial-trace`, the console and the Playwright attachment get the truncated line plus the WARN.
+
 ### Colors: ansi, fg, bg, callerColor
 
 | Option | Env | Default | Controls |
@@ -156,6 +181,10 @@ With `ansi: true`:
 - `callerColor` is its own opt-in and is **not** gated by `fg`/`bg`. With `fg: false, bg: false, callerColor: true` the body is bare and only the caller suffix is colored. `ansi: false` silences it too.
 - Tables, trees, rows and every action follow the same flags, including the table title's bold. Plain-text file sinks (partial, debug and full traces, JSONL) never contain escape codes.
 - Runtime switches: `enableFg()` / `disableFg()` / `isFgEnabled()` and the `Bg` equivalents.
+
+## More documentation
+
+[ARCHITECTURE.md](ARCHITECTURE.md) describes the internals end to end: file layout, the dispatch pipeline, config layering, sinks, caller resolution and the Playwright fixture. It ships inside the npm package.
 
 ## Differences from the Java logger
 

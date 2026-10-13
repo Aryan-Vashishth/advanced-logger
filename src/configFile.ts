@@ -60,6 +60,9 @@ export function loadConfigFile(env: NodeJS.ProcessEnv, cwd: string): Loaded | un
 
 let LOADED: string | undefined;
 
+/** Absolute path of the config file loaded in this process, if any. */
+export const loadedConfigFile = (): string | undefined => LOADED;
+
 /** Drop the cached module so the next load re-reads the file (tests, resetConfig). */
 export function forgetConfigFile(): void {
   if (LOADED !== undefined) {
@@ -102,6 +105,8 @@ const KEYS: Record<keyof LogConfigPatch, [check: (v: unknown) => boolean, expect
   ansi: [bool, 'a boolean'],
   fg: [bool, 'a boolean'],
   bg: [bool, 'a boolean'],
+  infoLogsCharLimit: [(v) => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0), 'a number >= 0 or null'],
+  maxLogFiles: [(v) => v === null || (Number.isInteger(v) && (v as number) >= 0), 'an integer >= 0 or null'],
   callerColor: [bool, 'a boolean'],
   tsFormat: [(v) => str(v) || typeof v === 'function', 'a string or a function'],
   segmentDivider: [str, 'a string'],

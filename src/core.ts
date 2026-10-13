@@ -1,7 +1,7 @@
 import { resolveCaller } from './caller';
-import { config, formatTs, workerLabel } from './config';
+import { config, formatTs, infoLimitHint, levelEnabled, workerLabel } from './config';
 import { type LogEvent, activeSinks } from './sinks';
-import { type LevelName, type LogIntent, resolveStyle } from './theme';
+import { type LevelName, LogIntent, resolveStyle } from './theme';
 
 let currentTest: string | undefined;
 
@@ -14,6 +14,41 @@ export const getTestContext = (): string | undefined => currentTest;
  * when nothing would write the event.
  */
 export function dispatch(
+  level: LevelName,
+  intent: LogIntent | null,
+  color: string,
+  label: string,
+  message: string | null | undefined,
+): void {
+  const cfg = config();
+  const limit = cfg.infoLogsCharLimit;
+  // Only INFO lines that the console would show, and never pre-colored blocks (tables, which have tableCellLimit).
+  if (
+    level === 'INFO' &&
+    intent !== null &&
+    limit != null &&
+    limit > 0 &&
+    message != null &&
+    message.length > limit &&
+    levelEnabled(cfg.level, 'INFO')
+  ) {
+    const total = message.length;
+    emit(level, intent, color, label, `${message.slice(0, limit)}... (${total} chars)`);
+    emit(
+      'WARN',
+      LogIntent.BASE,
+      themed('WARN', LogIntent.BASE),
+      'WARN',
+      `INFO log exceeded the ${limit} char threshold (${total} chars). Refer to the debug logs to see the full text. ${infoLimitHint()}`,
+    );
+    // A plain log() line is labelled with its own level; the full-text copy is a DEBUG line, so relabel it.
+    emit('DEBUG', intent, themed('DEBUG', intent), label === level ? 'DEBUG' : label, message);
+    return;
+  }
+  emit(level, intent, color, label, message);
+}
+
+function emit(
   level: LevelName,
   intent: LogIntent | null,
   color: string,

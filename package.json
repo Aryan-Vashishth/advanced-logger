@@ -22,7 +22,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "ARCHITECTURE.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

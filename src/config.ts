@@ -1,4 +1,4 @@
-import { forgetConfigFile, loadConfigFile } from './configFile';
+import { forgetConfigFile, loadConfigFile, loadedConfigFile } from './configFile';
 import type { LevelName } from './theme';
 
 export type RootLevel = 'debug' | 'info' | 'warn' | 'error' | 'off';
@@ -24,6 +24,16 @@ export interface LogConfig {
   fg: boolean;
   /** The theme background (one constant, BG_BLACK, for every level). Only matters when ansi is on. */
   bg: boolean;
+  /**
+   * Max log files kept per trace kind (partial-trace, debug-trace, full-trace, jsonl); older ones are deleted by
+   * mtime. Files of the current run are never deleted. null (or 0) keeps everything.
+   */
+  maxLogFiles: number | null;
+  /**
+   * Max chars for an INFO log (tables excluded). Longer ones print truncated with the total char count, followed by a
+   * WARN and a DEBUG line holding the full text. null (or 0) means no limit.
+   */
+  infoLogsCharLimit: number | null;
   /** Console-only: color the caller suffix separately. Breaks one-ANSI-block-per-line. Independent of fg and bg. */
   callerColor: boolean;
   /** Java-style pattern (yyyy MM dd HH mm ss SSS) or a formatter function. */
@@ -95,6 +105,8 @@ function builtinDefaults(env: NodeJS.ProcessEnv): LogConfig {
     ansi: heuristicAnsi(env, !!process.stdout?.isTTY),
     fg: true,
     bg: true,
+    infoLogsCharLimit: null,
+    maxLogFiles: null,
     callerColor: false,
     tsFormat: 'yyyy-MM-dd HH:mm:ss.SSS',
     segmentDivider: ' │ ',
@@ -127,6 +139,13 @@ function applyEnv(cfg: LogConfig, env: NodeJS.ProcessEnv): void {
   if (ansi !== undefined) cfg.ansi = ansi;
   const jsonl = envBool(env.VOID_LOG_JSONL);
   if (jsonl !== undefined) cfg.files.jsonl = jsonl;
+  const trunc = env.VOID_LOG_INFO_LOGS_CHAR_LIMIT?.trim();
+  if (trunc && /^\d+$/.test(trunc)) {
+    cfg.infoLogsCharLimit = Number(trunc) > 0 ? Number(trunc) : null;
+    LIMIT_SOURCE = 'env';
+  }
+  const maxFiles = env.VOID_LOG_MAX_FILES?.trim();
+  if (maxFiles && /^\d+$/.test(maxFiles)) cfg.maxLogFiles = Number(maxFiles) > 0 ? Number(maxFiles) : null;
   const fg = envBool(env.VOID_LOG_FG);
   if (fg !== undefined) cfg.fg = fg;
   const bg = envBool(env.VOID_LOG_BG);
@@ -147,6 +166,9 @@ function cloneConfig(c: LogConfig): LogConfig {
 
 let CURRENT: LogConfig | undefined;
 
+/** Which layer set the active infoLogsCharLimit, so the truncation warning can say what to edit. */
+let LIMIT_SOURCE: 'default' | 'file' | 'env' | 'code' = 'default';
+
 /**
  * Precedence, lowest to highest: built-in defaults, config file, env vars. configure() calls land on top afterwards.
  * A failing config file throws on every call until it is fixed, so the mistake cannot be missed.
@@ -155,10 +177,13 @@ function build(env: NodeJS.ProcessEnv = process.env): LogConfig {
   const cfg = builtinDefaults(env);
   // Re-entrancy guard: a config file that imports this package and touches config() while loading sees the defaults.
   CURRENT = cfg;
+  LIMIT_SOURCE = 'default';
   try {
     const loaded = loadConfigFile(env, process.cwd());
     if (loaded !== undefined) {
-      applyPatch(cfg, typeof loaded === 'function' ? loaded(cloneConfig(cfg)) : loaded);
+      const patch = typeof loaded === 'function' ? loaded(cloneConfig(cfg)) : loaded;
+      applyPatch(cfg, patch);
+      if (patch.infoLogsCharLimit !== undefined) LIMIT_SOURCE = 'file';
     }
     applyEnv(cfg, env);
   } catch (err) {
@@ -193,11 +218,29 @@ function applyPatch(target: LogConfig, patch: LogConfigPatch): void {
 export function configure(patch: LogConfigPatch | ((cfg: LogConfig) => void)): LogConfig {
   const cur = config();
   if (typeof patch === 'function') {
+    const before = cur.infoLogsCharLimit;
     patch(cur);
+    if (cur.infoLogsCharLimit !== before) LIMIT_SOURCE = 'code';
     return cur;
   }
   applyPatch(cur, patch);
+  if (patch.infoLogsCharLimit !== undefined) LIMIT_SOURCE = 'code';
   return cur;
+}
+
+/** Tells the reader where to raise infoLogsCharLimit, based on which layer set the active value. */
+export function infoLimitHint(): string {
+  const file = loadedConfigFile();
+  switch (LIMIT_SOURCE) {
+    case 'file':
+      return `To increase the limit, change infoLogsCharLimit in ${file}.`;
+    case 'env':
+      return 'To increase the limit, change the VOID_LOG_INFO_LOGS_CHAR_LIMIT environment variable.';
+    case 'code':
+      return 'To increase the limit, change the infoLogsCharLimit passed to configure() in your code.';
+    default:
+      return 'To increase the limit, set infoLogsCharLimit in your logger config file or VOID_LOG_INFO_LOGS_CHAR_LIMIT.';
+  }
 }
 
 /** Types a logger.config.* file. Returns its argument unchanged; the type is exactly LogConfigPatch. */

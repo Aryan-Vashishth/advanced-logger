@@ -101,7 +101,63 @@ function appendSync(file: string, text: string): void {
   fs.writeSync(fdFor(file), text);
 }
 
+/** Trace kinds already pruned by this process (once per kind, at its first write). */
+const PRUNED = new Set<string>();
+
+/**
+ * Retention: keep at most `maxLogFiles` files per trace kind (newest by mtime, across date folders).
+ * Files of the current run are never deleted (parallel workers share one run id), so they may exceed the limit.
+ * Only files named like this logger's own output are touched. Best effort: errors never reach the caller.
+ */
+function pruneOnce(cfg: LogConfig, kind: FileKind | 'jsonl'): void {
+  const max = cfg.maxLogFiles;
+  if (max == null || max <= 0) return;
+  const key = `${path.resolve(cfg.logDir)}|${kind}`;
+  if (PRUNED.has(key)) return;
+  PRUNED.add(key);
+  try {
+    const { runId } = getRun();
+    const own = new RegExp(`^${kind}-.+\\.(log|jsonl)$`);
+    const files: Array<{ file: string; mtime: number; current: boolean }> = [];
+    for (const day of fs.readdirSync(cfg.logDir, { withFileTypes: true })) {
+      if (!day.isDirectory()) continue;
+      const dir = path.join(cfg.logDir, day.name, kind);
+      let names: string[];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (!own.test(name)) continue;
+        const file = path.join(dir, name);
+        try {
+          files.push({ file, mtime: fs.statSync(file).mtimeMs, current: name.includes(runId) });
+        } catch {
+          /* removed by another worker */
+        }
+      }
+    }
+    const keepOthers = Math.max(0, max - files.filter((f) => f.current).length);
+    const old = files.filter((f) => !f.current).sort((a, b) => b.mtime - a.mtime).slice(keepOthers);
+    for (const f of old) {
+      try {
+        fs.rmSync(f.file, { force: true });
+        const dir = path.dirname(f.file);
+        if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+        const day = path.dirname(dir);
+        if (fs.readdirSync(day).length === 0) fs.rmdirSync(day);
+      } catch {
+        /* in use, or already gone */
+      }
+    }
+  } catch {
+    /* retention must never break logging */
+  }
+}
+
 export function closeAllFiles(): void {
+  PRUNED.clear();
   for (const fd of FD_CACHE.values()) {
     try {
       fs.closeSync(fd);
@@ -126,6 +182,7 @@ function fileSink(kind: FileKind, enabled: (cfg: LogConfig) => boolean, rootOnly
       if (lines.length === 0) return;
       const prefix = `${ev.worker} │ `;
       appendSync(traceFilePath(cfg, kind), lines.map((l) => `${prefix}${stripAnsi(l)}`).join('\n') + '\n');
+      pruneOnce(cfg, kind);
     },
   };
 }
@@ -166,6 +223,7 @@ export const jsonlSink: Sink = {
       visible: levelEnabled(cfg.level, ev.level),
     };
     appendSync(traceFilePath(cfg, 'jsonl', 'jsonl'), JSON.stringify(rec) + '\n');
+    pruneOnce(cfg, 'jsonl');
   },
 };
 
