@@ -1,6 +1,6 @@
 {
   "name": "@aryan-vashishth/advanced-logger",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-contained logger for Playwright/TypeScript. Port of VOID core.logging.",
   "repository": {
     "type": "git",
@@ -23,7 +23,8 @@
   },
   "files": [
     "dist",
-    "ARCHITECTURE.md"
+    "ARCHITECTURE.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

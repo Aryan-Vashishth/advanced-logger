@@ -15,7 +15,7 @@ import { info, error } from './logger';
 export const test = base.extend<{ voidLog: void }>({
   voidLog: [
     async ({}, use, testInfo) => {
-      setTestContext(testInfo.titlePath.join(' > '));
+      setTestContext(testInfo.titlePath.join(' > '), testInfo.title);
       const capture = captureLogs();
       info.log(`TEST START | ${testInfo.titlePath.join(' > ')}`);
       try {

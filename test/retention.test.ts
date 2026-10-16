@@ -123,6 +123,101 @@ describe('maxLogFiles', () => {
   });
 });
 
+describe('recent runs', () => {
+  it('maxLogFiles_neverDeletesARunWrittenToInTheLastHour', () => {
+    const live = seed('2030-01-10', 'partial-trace', ['partial-trace-other-run-w0.log'], [0.01])[0]!; // ~15 min old
+    const old = seed('2030-01-01', 'partial-trace', ['partial-trace-r1-main.log'], [9])[0]!;
+    configure({ maxLogFiles: 1 });
+    info.log('now');
+    expect(fs.existsSync(live)).toBe(true);
+    expect(fs.existsSync(old)).toBe(false);
+  });
+
+  it('aRunCountsAsRecentByItsNewestFile', () => {
+    // w0 stopped writing long ago, but w1 of the same run wrote recently: the whole run stays.
+    const [w0, w1] = seed('2030-01-09', 'partial-trace', ['partial-trace-other-w0.log', 'partial-trace-other-w1.log'], [3, 0.01]);
+    configure({ maxLogFiles: 1 });
+    info.log('now');
+    expect(fs.existsSync(w0!)).toBe(true);
+    expect(fs.existsSync(w1!)).toBe(true);
+  });
+});
+
+describe('maxRuns', () => {
+  it('keepsTheNewestNRuns_includingTheCurrentOne_deletingWholeRuns', () => {
+    const r1 = seed('2030-01-01', 'partial-trace', ['partial-trace-r1-w0.log', 'partial-trace-r1-w1.log'], [9, 9]);
+    const r2 = seed('2030-01-05', 'partial-trace', ['partial-trace-r2-w0.log', 'partial-trace-r2-w1.log', 'partial-trace-r2-w2.log'], [5, 5, 5]);
+    configure({ maxRuns: 2 });
+    info.log('now');
+    for (const f of r2) expect(fs.existsSync(f)).toBe(true);
+    for (const f of r1) expect(fs.existsSync(f)).toBe(false);
+    expect(names('partial-trace')).toHaveLength(4); // all of r2 + current
+  });
+
+  it('runAge_isItsNewestFile', () => {
+    // r1 has an old file and a newer one; r2's only file sits between them. r1 is the newer run.
+    const r1 = seed('2030-01-01', 'partial-trace', ['partial-trace-r1-w0.log', 'partial-trace-r1-w1.log'], [9, 2]);
+    const r2 = seed('2030-01-04', 'partial-trace', ['partial-trace-r2-w0.log'], [5]);
+    configure({ maxRuns: 2 });
+    info.log('now');
+    for (const f of r1) expect(fs.existsSync(f)).toBe(true);
+    expect(fs.existsSync(r2[0]!)).toBe(false);
+  });
+
+  it('runIdsContainingDashes_groupCorrectly', () => {
+    const run = seed('2030-01-01', 'partial-trace', ['partial-trace-20300101-101010-001-pid4-w0.log', 'partial-trace-20300101-101010-001-pid4-w1.log'], [9, 9]);
+    const newer = seed('2030-01-02', 'partial-trace', ['partial-trace-20300102-101010-001-pid5-main.log'], [8])[0]!;
+    configure({ maxRuns: 2 });
+    info.log('now');
+    expect(fs.existsSync(newer)).toBe(true);
+    for (const f of run) expect(fs.existsSync(f)).toBe(false);
+  });
+
+  it('withMaxLogFiles_aFileGoesIfEitherLimitSaysSo', () => {
+    const [a, b] = seed('2030-01-05', 'partial-trace', ['partial-trace-r2-w0.log', 'partial-trace-r2-w1.log'], [5, 5]);
+    configure({ maxRuns: 5, maxLogFiles: 2 }); // maxRuns keeps r2 whole; maxLogFiles keeps current + 1 other file
+    info.log('now');
+    expect([a, b].filter((f) => fs.existsSync(f!))).toHaveLength(1);
+  });
+
+  it('nullOrZero_keepsEverything', () => {
+    for (const v of [null, 0]) {
+      seed('2030-01-01', 'partial-trace', [`partial-trace-old${v}-main.log`], [5]);
+      configure({ maxRuns: v });
+      info.log('x');
+      closeAllFiles();
+    }
+    expect(names('partial-trace')).toHaveLength(3);
+  });
+
+  it('env_setsItAndZeroDisables_invalidIgnored', () => {
+    process.env.VOID_LOG_MAX_RUNS = '4';
+    expect(resetConfig().maxRuns).toBe(4);
+    process.env.VOID_LOG_MAX_RUNS = '0';
+    expect(resetConfig().maxRuns).toBeNull();
+    process.env.VOID_LOG_MAX_RUNS = 'lots';
+    expect(resetConfig().maxRuns).toBeNull();
+  });
+});
+
+describe('worker without a shared run id', () => {
+  it('skipsRetention_soSiblingWorkersFilesSurvive', () => {
+    delete process.env.VOID_RUN_ID;
+    process.env.TEST_WORKER_INDEX = '0';
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      // A sibling worker's live file has a different (pid-based) run id, so it would look like an older run.
+      const sibling = seed('2030-01-10', 'partial-trace', ['partial-trace-20300110-090000-000-pid99-w1.log'], [2])[0]!;
+      configure({ maxLogFiles: 1, maxRuns: 1 });
+      info.log('now');
+      expect(fs.existsSync(sibling)).toBe(true);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('log retention is off'));
+    } finally {
+      delete process.env.TEST_WORKER_INDEX;
+    }
+  });
+});
+
 describe('maxLogFiles config surface', () => {
   it('env_setsItAndZeroDisables_invalidIgnored', () => {
     process.env.VOID_LOG_MAX_FILES = '7';

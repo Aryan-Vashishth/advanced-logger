@@ -32,7 +32,8 @@ test/
   colors.test.ts        fg/bg/ansi/callerColor matrix
   config-file.test.ts   discovery, forms, precedence, failures
   truncate.test.ts      infoLogsCharLimit + its hint
-  retention.test.ts     maxLogFiles
+  retention.test.ts     maxRuns, maxLogFiles, recent/missing-run-id guards
+  separable.test.ts     consoleWorker, consoleTest, missing initRun() warning, configure() validation
   multi-worker.test.ts  spawns real Playwright with 2 workers (fixtures/multi-worker/)
   *.spec.ts, playwright*.config.ts, global-setup.ts   Playwright e2e/demo specs
 dist/             tsc output (CommonJS, ES2022), gitignored, what npm publishes
@@ -123,7 +124,8 @@ interface LogEvent {
   caller: string;                  // "Callee.method ← Caller.method", plain text
   chain: string;                   // in-project call chain, leaf first, plain text
   worker: string;                  // 'w<TEST_WORKER_INDEX>' or 'main'
-  test?: string;                   // set by the Playwright fixture
+  test?: string;                   // full title path, set by the Playwright fixture (jsonl)
+  testTitle?: string;              // the test's own title (consoleTest prefix)
 }
 interface Sink { accepts(level, cfg): boolean; write(ev, cfg): void }
 ```
@@ -141,8 +143,11 @@ Rendered line shape: `<ts> │ <label> │ <message line>` where `│` is `cfg.s
 | `fg` | bool, `true` | Foreground colors (intent color; level color on BASE lines; bold) |
 | `bg` | bool, `true` | The theme background (one constant, `BG_BLACK`, for all levels) |
 | `callerColor` | bool, `false` | Color the caller suffix separately (console, debug level). Independent of fg/bg |
-| `infoLogsCharLimit` | number\|null, `null` | INFO truncation limit (§9). null/0 = off |
-| `maxLogFiles` | number\|null, `null` | Retention per trace kind (§10). null/0 = off |
+| `infoLogsCharLimit` | number\|null, `null` | INFO truncation limit (§11). null/0 = off |
+| `maxRuns` | number\|null, `null` | Retention per trace kind, in whole runs (§12). null/0 = off |
+| `maxLogFiles` | number\|null, `null` | Retention per trace kind, in files (§12). null/0 = off |
+| `consoleWorker` | bool, `false` | Console lines prefixed `w<N> │ ` (§9) |
+| `consoleTest` | bool, `false` | Console lines prefixed with the test title, max 40 chars (§9) |
 | `tsFormat` | string\|fn, `yyyy-MM-dd HH:mm:ss.SSS` | Java-style pattern or `(Date)=>string` |
 | `segmentDivider` | string, `' │ '` | Column separator |
 | `tableCellLimit`, `tableCellLimitEnabled` | 40, false | Truncate table/row cells |
@@ -164,7 +169,7 @@ Rendered line shape: `<ts> │ <label> │ <message line>` where `│` is `cfg.s
 3. **Environment variables**: `applyEnv()`.
 4. **`configure()` calls** in code mutate the live object afterwards, so they always win.
 
-Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, `VOID_RUN_DATE`, plus `NO_COLOR` / `FORCE_COLOR`. Booleans: `1/true/yes/on` true, anything else non-empty false. An invalid level or non-numeric limit is ignored (so it cannot override a lower layer). `NO_COLOR`/`FORCE_COLOR` count as env-level (they beat `ansi` in a file); terminal auto-detection counts as default-level (the file beats it). See `explicitAnsi()` vs `heuristicAnsi()`.
+Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, `VOID_RUN_DATE`, plus `NO_COLOR` / `FORCE_COLOR`. Booleans: `1/true/yes/on` true, anything else non-empty false. An invalid level or non-numeric limit is ignored (so it cannot override a lower layer). `NO_COLOR`/`FORCE_COLOR` count as env-level (they beat `ansi` in a file); terminal auto-detection counts as default-level (the file beats it). See `explicitAnsi()` vs `heuristicAnsi()`.
 
 ### 6.3 Lazy, per-process state
 
@@ -173,6 +178,7 @@ Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_
 - `config()` returns `CURRENT ?? build()`. The first call in a process builds the config (including reading the config file). Every process, including each Playwright worker, does this independently.
 - `build()` sets `CURRENT = cfg` early as a **re-entrancy guard**: a config file that imports this package and touches `config()` while loading sees the defaults instead of recursing. On failure it sets `CURRENT = undefined` and rethrows, so every later call throws again (no silent fallback to defaults).
 - `configure(patch | fn)`, the `enable*/disable*` mutators, and every internal reader go through `config()`, so they trigger the load first. Therefore a `configure()` call made before any log call still sits above the file.
+- `configure(patch)` runs the patch through `checkPatch` (the config file's validator, §7) with the source label `configure()`. Unlike a file, it never throws: each problem is written to stderr once per process (`WARNED`, cleared by `resetConfig()`) and that key is left out; the rest applies. A non-object patch warns and is ignored. The callback form is not checked.
 - `resetConfig()` clears `CURRENT`, forgets the cached config file (`forgetConfigFile()` deletes it from `require.cache`), and rebuilds. Used by tests.
 - A mutable `LIMIT_SOURCE` records which layer set `infoLogsCharLimit` (`default|file|env|code`) for the truncation hint.
 
@@ -184,7 +190,7 @@ Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_
 - `VOID_LOG_CONFIG` overrides the path (resolved against cwd). An explicit path that does not exist **throws** (deliberate: a typo should not be silent).
 - Loaded with a lazy `require(file)` inside `loadConfigFile`. Under Playwright, its TypeScript hook transpiles `.ts`; under plain Node, type stripping or CJS handles it. No transpiler dependency. `unwrapDefault` handles `__esModule` interop (`export default`), `module.exports =`, and JSON.
 - Forms: a plain object (`LogConfigPatch`) or `(config: LogConfig) => LogConfigPatch`. The function receives a **clone** of the defaults (`cloneConfig`), so it cannot mutate live state. `defineConfig()` is an identity helper for typing.
-- Validation (`validatePatch`, table `KEYS`): unknown option names throw (catches typos like `levl`), wrong types throw, `undefined` values are dropped, `files` sub-keys are checked. Every error message contains the absolute file path (`fail()`), wrapping the original in `cause`.
+- Validation (table `KEYS`): `checkPatch(value, where)` returns the clean patch plus one message per problem (unknown option name, such as a typo like `levl`; wrong type; bad `files` sub-key), and drops `undefined` values. `validatePatch` throws the first problem for a file; `configure()` warns about each one instead (§6.3). File error messages contain the absolute file path; load failures (`fail()`) wrap the original in `cause`.
 - Loaded once per process (Node's require cache plus `CURRENT`). `loadedConfigFile()` exposes the path for messages.
 
 ## 8. Caller and chain resolution (`caller.ts`)
@@ -220,6 +226,7 @@ If the chain comes out empty, `projectRoots` does not cover the test code; set `
 Files: `<logDir>/<runDate>/<kind>/<kind>-<runId>-<worker>.log` (`traceFilePath`). Writes are **synchronous** (`fs.writeSync` on cached fds in `FD_CACHE`), one file per worker, so parallel workers never interleave and a crash loses nothing. Every file line is prefixed `w<N> │ ` and passes through `stripAnsi`, so **plain-text sinks never contain escape codes** regardless of color flags. `closeAllFiles()` closes fds (and clears prune bookkeeping).
 
 Console rendering (`consoleSink`):
+- Opt-in prefix (`consolePrefix`), placed before the timestamp and inside the color block: `w<N> │ ` when `consoleWorker`, then `<testTitle> │ ` when `consoleTest` and a test is running (line breaks flattened, cut to `TEST_TAG_MAX` = 40 chars with `...`). The worker part uses a literal ` │ `, like the file prefix, not `segmentDivider`. The GitHub annotation text carries the same prefix. File sinks do not use it: they are already per worker, and tests are bracketed by `TEST START`/`TEST END`.
 - `ansi` off: plain.
 - `ansi` on: `wrap(s) = ev.color ? ev.color + s + RESET : s`. When `fg` and `bg` are both off, `ev.color` is `''` and the body is bare (no stray reset).
 - `callerColor` on and a caller exists: body wrapped, then `div + CALLER_FG + caller + RESET`. Not gated by `fg`/`bg`; only `ansi:false` silences it.
@@ -249,18 +256,27 @@ Then three events are emitted via `emit()`:
 
 `infoLimitHint()` (in `config.ts`) tells the reader what to edit, depending on `LIMIT_SOURCE`: the config file's absolute path, the env var name, or the `configure()` call.
 
-## 12. Log file retention (`maxLogFiles`, in `sinks.ts`)
+## 12. Log file retention (`maxRuns`, `maxLogFiles`, in `sinks.ts`)
 
-`pruneOnce(cfg, kind)` runs after the first write of each kind in a process (guarded by `PRUNED`). It lists `<logDir>/*/<kind>/<kind>-*.(log|jsonl)`, never deletes files whose name contains the current run id (parallel workers share it), keeps the newest by mtime up to `maxLogFiles - currentRunFiles`, deletes the rest, and removes emptied folders. Best effort; all errors swallowed. Counted per kind across all dates, in files (not runs).
+`pruneOnce(cfg, kind)` runs after the first write of each kind in a process (guarded by `PRUNED`). It lists `<logDir>/*/<kind>/<kind>-*.(log|jsonl)` across all date folders and groups files by run id, parsed from `<kind>-<runId>-<main|wN>.<ext>` (a name without a worker suffix counts as its own run). A run's age is its newest file's mtime.
+
+- `maxLogFiles`: of the files outside the current run, the newest `maxLogFiles - currentRunFiles` are kept.
+- `maxRuns`: of the runs other than the current one, the newest `maxRuns - 1` are kept; older runs are marked whole.
+- A file goes if either limit marks it. Then two guards apply: files whose name contains the current run id are never marked (parallel workers share it), and a run whose newest file is younger than `RECENT_RUN_MS` (1 hour) is never deleted, because another runner or CI shard may still be writing it. Neither limit is a hard cap.
+- Skipped entirely when `runIdMissing()` (§13): without a shared run id, each worker's "current run" is its own pid-based id, and its siblings' live files would look like an older run.
+
+Emptied kind and date folders are removed. Best effort; all errors swallowed.
 
 ## 13. Run identity and workers (`config.ts`)
 
 - `initRun()` (call from `globalSetup`) sets `process.env.VOID_RUN_ID` and `VOID_RUN_DATE` if absent, so every worker (which inherits env) shares one run id. `getRun()` falls back to a per-process id if unset.
+- `runIdMissing()` is true in a Playwright worker (`TEST_WORKER_INDEX` set) without `VOID_RUN_ID`, meaning `initRun()` was never called in the runner. Then `traceFilePath` writes one stderr warning per process (`RUN_ID_WARNED`, reset by `closeAllFiles()`) and retention is off (§12). A worker cannot fix this itself: env it sets is not seen by its siblings.
+- Only process-based workers are supported. A `worker_threads` thread starts with a copy of its parent's `process.env`, so it gets the same `workerLabel()` and run id, and appends to the same files through its own fds, with no way to tell its lines apart.
 - `workerLabel()` is `w<TEST_WORKER_INDEX>` under Playwright, else `main`. It appears in file names, line prefixes and events.
 
 ## 14. Playwright integration (`playwright.ts`)
 
-`test = base.extend({ voidLog: [fn, { auto: true }] })`: an auto fixture active for every test. Per test it: sets the test context (`setTestContext`, tags JSONL records), starts a `captureLogs()` buffer, logs `TEST START`, runs the test, then logs `TEST END | status | ms` (`error.failed` on failure, `info.success` otherwise), and attaches the captured text as `void-log` per `cfg.attach` (`on-failure` default). It also re-exports `expect` and `initRun`. Tests import `test`/`expect` from this entry instead of `@playwright/test`.
+`test = base.extend({ voidLog: [fn, { auto: true }] })`: an auto fixture active for every test. Per test it: sets the test context (`setTestContext(titlePath.join(' > '), title)`: the path tags JSONL records, the title feeds `consoleTest`), starts a `captureLogs()` buffer, logs `TEST START`, runs the test, then logs `TEST END | status | ms` (`error.failed` on failure, `info.success` otherwise), and attaches the captured text as `void-log` per `cfg.attach` (`on-failure` default). It also re-exports `expect` and `initRun`. Tests import `test`/`expect` from this entry instead of `@playwright/test`.
 
 ## 15. Extension points
 
@@ -282,10 +298,13 @@ Then three events are emitted via `emit()`:
 9. The default theme/`fg`/`bg` defaults must keep 0.1.0 output byte-identical.
 10. Config is built lazily at first use (not at import). An env var changed between import and the first log call is honored; this is the one intentional difference from 0.1.0.
 11. In regexes written inside template literals, escape backslashes (`\\.`); a past bug came from exactly this.
+12. Retention must never run in a worker without a shared run id (`runIdMissing()`), and must never delete the current run or a run touched within `RECENT_RUN_MS`.
+13. `configure()` never throws on bad input; it warns and skips. Only a config file fails loudly.
+14. New output options that change line format default to off, so existing console and file output stays byte-identical.
 
 ## 17. Differences from the Java logger
 
-Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip archives. Changed: caller frames are excluded by path rather than method-name prefix. Added: secret redaction, JSONL sink, custom sinks, in-memory capture, Playwright fixture with attachment, per-worker files, config file, `fg`/`bg`, INFO truncation, file retention.
+Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip archives. Changed: caller frames are excluded by path rather than method-name prefix. Added: secret redaction, JSONL sink, custom sinks, in-memory capture, Playwright fixture with attachment, per-worker files, config file, `fg`/`bg`, INFO truncation, file and run retention, console worker/test prefixes.
 
 ## 18. Testing map
 
@@ -295,8 +314,9 @@ Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip
 | fg/bg/ansi/callerColor combinations across all actions, env parsing | `colors.test.ts` |
 | Discovery order, forms, precedence, `VOID_LOG_CONFIG`, loud failures | `config-file.test.ts` |
 | Truncation text, WARN/DEBUG lines, hint by source | `truncate.test.ts` |
-| Retention counting, protection of current run, foreign files | `retention.test.ts` |
-| Real Playwright, 2 workers, `.ts` config, `globalSetup` isolation | `multi-worker.test.ts` + `fixtures/multi-worker/` |
+| Retention by files and runs, protection of current and recent runs, missing run id, foreign files | `retention.test.ts` |
+| consoleWorker/consoleTest prefixes, missing-run-id warning, `configure()` validation | `separable.test.ts` |
+| Real Playwright, 2 workers, `.ts` config, `globalSetup` isolation, console prefixes, shared vs split run id | `multi-worker.test.ts` + `fixtures/multi-worker/` |
 | Visual/e2e demos | `*.spec.ts` via `test/playwright.config.ts` |
 
 Tests use `resetConfig()` plus `configure({ logDir: tmp, ansi: false, tsFormat: () => 'TS' })` for deterministic output, and spy on `process.stdout.write`. Config-file tests `chdir` into a temp dir so no stray `logger.config.*` leaks in.

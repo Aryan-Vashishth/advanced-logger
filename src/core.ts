@@ -4,9 +4,16 @@ import { type LogEvent, activeSinks } from './sinks';
 import { type LevelName, LogIntent, resolveStyle } from './theme';
 
 let currentTest: string | undefined;
+let currentTitle: string | undefined;
 
-/** Tag subsequent events (jsonl records) with the running test. Set by the Playwright fixture. */
-export const setTestContext = (title: string | undefined): void => void (currentTest = title);
+/**
+ * Tag subsequent events with the running test: `test` (the full path) goes to jsonl records, `title` (default: `test`)
+ * to the consoleTest prefix. Set by the Playwright fixture.
+ */
+export function setTestContext(test: string | undefined, title?: string): void {
+  currentTest = test;
+  currentTitle = test === undefined ? undefined : (title ?? test);
+}
 export const getTestContext = (): string | undefined => currentTest;
 
 /**
@@ -73,6 +80,7 @@ function emit(
     chain,
     worker: workerLabel(),
     test: currentTest,
+    testTitle: currentTitle,
   };
   for (const s of sinks) {
     try {

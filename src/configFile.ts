@@ -107,6 +107,9 @@ const KEYS: Record<keyof LogConfigPatch, [check: (v: unknown) => boolean, expect
   bg: [bool, 'a boolean'],
   infoLogsCharLimit: [(v) => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0), 'a number >= 0 or null'],
   maxLogFiles: [(v) => v === null || (Number.isInteger(v) && (v as number) >= 0), 'an integer >= 0 or null'],
+  maxRuns: [(v) => v === null || (Number.isInteger(v) && (v as number) >= 0), 'an integer >= 0 or null'],
+  consoleWorker: [bool, 'a boolean'],
+  consoleTest: [bool, 'a boolean'],
   callerColor: [bool, 'a boolean'],
   tsFormat: [(v) => str(v) || typeof v === 'function', 'a string or a function'],
   segmentDivider: [str, 'a string'],
@@ -126,36 +129,51 @@ const KEYS: Record<keyof LogConfigPatch, [check: (v: unknown) => boolean, expect
 
 const FILE_KEYS = ['debugTrace', 'partialTrace', 'fullTrace', 'jsonl'];
 
+/**
+ * Check a patch against KEYS. Every unknown key or wrong-typed value becomes a message naming `where`, and is left
+ * out of the returned patch; undefined values are dropped. Shared by config files (which throw on the first problem)
+ * and configure() (which warns and carries on).
+ */
+export function checkPatch(value: Record<string, unknown>, where: string): { patch: LogConfigPatch; problems: string[] } {
+  const out: Record<string, unknown> = {};
+  const problems: string[] = [];
+  for (const [key, v] of Object.entries(value)) {
+    if (v === undefined) continue;
+    const rule = (KEYS as Record<string, [(v: unknown) => boolean, string] | undefined>)[key];
+    if (!rule) {
+      problems.push(`[advanced-logger] ${where} has an unknown option '${key}'. Valid options: ${Object.keys(KEYS).join(', ')}.`);
+      continue;
+    }
+    if (!rule[0](v)) {
+      problems.push(`[advanced-logger] ${where}: option '${key}' must be ${rule[1]} (got ${describe(v)}).`);
+      continue;
+    }
+    if (key === 'files') {
+      const files: Record<string, unknown> = {};
+      for (const [fk, fv] of Object.entries(v as Record<string, unknown>)) {
+        if (fv === undefined) continue;
+        if (!FILE_KEYS.includes(fk) || typeof fv !== 'boolean') {
+          problems.push(`[advanced-logger] ${where}: option 'files.${fk}' must be a boolean and one of ${FILE_KEYS.join(', ')}.`);
+          continue;
+        }
+        files[fk] = fv;
+      }
+      out[key] = files;
+      continue;
+    }
+    out[key] = v;
+  }
+  return { patch: out as LogConfigPatch, problems };
+}
+
 /** Unknown keys are rejected (a typo such as `levl` must not be silently ignored); undefined values are dropped. */
 function validatePatch(value: unknown, file: string, hint: string): LogConfigPatch {
   if (!isPlainObject(value)) {
     throw new Error(`[advanced-logger] Config file ${file} has an invalid shape: ${hint} (got ${describe(value)}).`);
   }
-  const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value)) {
-    if (v === undefined) continue;
-    const rule = (KEYS as Record<string, [(v: unknown) => boolean, string] | undefined>)[key];
-    if (!rule) {
-      throw new Error(
-        `[advanced-logger] Config file ${file} has an unknown option '${key}'. Valid options: ${Object.keys(KEYS).join(', ')}.`,
-      );
-    }
-    if (!rule[0](v)) {
-      throw new Error(`[advanced-logger] Config file ${file}: option '${key}' must be ${rule[1]} (got ${describe(v)}).`);
-    }
-    if (key === 'files') {
-      for (const [fk, fv] of Object.entries(v as Record<string, unknown>)) {
-        if (fv === undefined) continue;
-        if (!FILE_KEYS.includes(fk) || typeof fv !== 'boolean') {
-          throw new Error(
-            `[advanced-logger] Config file ${file}: option 'files.${fk}' must be a boolean and one of ${FILE_KEYS.join(', ')}.`,
-          );
-        }
-      }
-    }
-    out[key] = v;
-  }
-  return out as LogConfigPatch;
+  const { patch, problems } = checkPatch(value, `Config file ${file}`);
+  if (problems.length > 0) throw new Error(problems[0]);
+  return patch;
 }
 
 function describe(v: unknown): string {

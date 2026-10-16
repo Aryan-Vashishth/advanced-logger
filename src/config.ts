@@ -1,4 +1,4 @@
-import { forgetConfigFile, loadConfigFile, loadedConfigFile } from './configFile';
+import { checkPatch, forgetConfigFile, loadConfigFile, loadedConfigFile } from './configFile';
 import type { LevelName } from './theme';
 
 export type RootLevel = 'debug' | 'info' | 'warn' | 'error' | 'off';
@@ -26,14 +26,24 @@ export interface LogConfig {
   bg: boolean;
   /**
    * Max log files kept per trace kind (partial-trace, debug-trace, full-trace, jsonl); older ones are deleted by
-   * mtime. Files of the current run are never deleted. null (or 0) keeps everything.
+   * mtime. Files of the current run, and of any run written to in the last hour, are never deleted, so this is not a
+   * hard cap. null (or 0) keeps everything. Prefer maxRuns: a file count can keep part of a parallel run.
    */
   maxLogFiles: number | null;
+  /**
+   * Max runs kept per trace kind, the current run included. Older runs are deleted whole, oldest first. A run written
+   * to in the last hour is never deleted. null (or 0) keeps everything.
+   */
+  maxRuns: number | null;
   /**
    * Max chars for an INFO log (tables excluded). Longer ones print truncated with the total char count, followed by a
    * WARN and a DEBUG line holding the full text. null (or 0) means no limit.
    */
   infoLogsCharLimit: number | null;
+  /** Console-only: prefix each line with the worker (w<N>, or main outside Playwright), as the trace files do. */
+  consoleWorker: boolean;
+  /** Console-only: prefix each line with the running test's title (set by the Playwright fixture), max 40 chars. */
+  consoleTest: boolean;
   /** Console-only: color the caller suffix separately. Breaks one-ANSI-block-per-line. Independent of fg and bg. */
   callerColor: boolean;
   /** Java-style pattern (yyyy MM dd HH mm ss SSS) or a formatter function. */
@@ -107,6 +117,9 @@ function builtinDefaults(env: NodeJS.ProcessEnv): LogConfig {
     bg: true,
     infoLogsCharLimit: null,
     maxLogFiles: null,
+    maxRuns: null,
+    consoleWorker: false,
+    consoleTest: false,
     callerColor: false,
     tsFormat: 'yyyy-MM-dd HH:mm:ss.SSS',
     segmentDivider: ' │ ',
@@ -146,6 +159,8 @@ function applyEnv(cfg: LogConfig, env: NodeJS.ProcessEnv): void {
   }
   const maxFiles = env.VOID_LOG_MAX_FILES?.trim();
   if (maxFiles && /^\d+$/.test(maxFiles)) cfg.maxLogFiles = Number(maxFiles) > 0 ? Number(maxFiles) : null;
+  const maxRuns = env.VOID_LOG_MAX_RUNS?.trim();
+  if (maxRuns && /^\d+$/.test(maxRuns)) cfg.maxRuns = Number(maxRuns) > 0 ? Number(maxRuns) : null;
   const fg = envBool(env.VOID_LOG_FG);
   if (fg !== undefined) cfg.fg = fg;
   const bg = envBool(env.VOID_LOG_BG);
@@ -214,7 +229,14 @@ function applyPatch(target: LogConfig, patch: LogConfigPatch): void {
   if (includeOnlyPrefixes) target.includeOnlyPrefixes = new Set(includeOnlyPrefixes);
 }
 
-/** Merge a patch, or mutate in place with a callback. Set-typed fields accept arrays in a patch. */
+/** configure() problems already reported in this process, so a call inside a loop or hook warns once. */
+const WARNED = new Set<string>();
+
+/**
+ * Merge a patch, or mutate in place with a callback. Set-typed fields accept arrays in a patch.
+ * A patch is checked like a config file, but a problem never throws (a logger must not fail a test): an unknown
+ * option or a wrong-typed value prints one stderr warning and is skipped, and the rest of the patch still applies.
+ */
 export function configure(patch: LogConfigPatch | ((cfg: LogConfig) => void)): LogConfig {
   const cur = config();
   if (typeof patch === 'function') {
@@ -223,9 +245,22 @@ export function configure(patch: LogConfigPatch | ((cfg: LogConfig) => void)): L
     if (cur.infoLogsCharLimit !== before) LIMIT_SOURCE = 'code';
     return cur;
   }
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+    warnOnce(`[advanced-logger] configure() expects an object or a function (got ${patch === null ? 'null' : typeof patch}); ignored.`);
+    return cur;
+  }
+  const checked = checkPatch(patch as Record<string, unknown>, 'configure()');
+  for (const p of checked.problems) warnOnce(`${p} Skipped.`);
+  patch = checked.patch;
   applyPatch(cur, patch);
   if (patch.infoLogsCharLimit !== undefined) LIMIT_SOURCE = 'code';
   return cur;
+}
+
+function warnOnce(msg: string): void {
+  if (WARNED.has(msg)) return;
+  WARNED.add(msg);
+  process.stderr.write(msg + '\n');
 }
 
 /** Tells the reader where to raise infoLogsCharLimit, based on which layer set the active value. */
@@ -253,6 +288,7 @@ export function defineConfig(c: LogConfigPatch | ((config: LogConfig) => LogConf
 /** Restore defaults and re-read env and the config file. Mainly for tests. */
 export function resetConfig(): LogConfig {
   CURRENT = undefined;
+  WARNED.clear();
   forgetConfigFile();
   return config();
 }
@@ -357,6 +393,14 @@ export function getRun(): { runId: string; runDate: string } {
     runId: process.env.VOID_RUN_ID || FALLBACK_RUN.runId,
     runDate: process.env.VOID_RUN_DATE || FALLBACK_RUN.runDate,
   };
+}
+
+/**
+ * True in a Playwright worker whose runner never called initRun(). Each such worker falls back to its own pid-based
+ * run id, so its files are split from its siblings' and retention would see their live files as an older run.
+ */
+export function runIdMissing(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.TEST_WORKER_INDEX != null && !env.VOID_RUN_ID;
 }
 
 /** Worker label for the thread column: w<TEST_WORKER_INDEX> under Playwright, else "main". */

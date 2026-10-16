@@ -14,7 +14,7 @@ npm install @aryan-vashishth/advanced-logger
 Pin an exact version if you want reproducible installs:
 
 ```bash
-npm install @aryan-vashishth/advanced-logger@0.2.0
+npm install @aryan-vashishth/advanced-logger@0.3.0
 ```
 
 Requirements:
@@ -42,6 +42,7 @@ Check the installed version with `npm ls @aryan-vashishth/advanced-logger`, and 
    ```
 
 3. Reference it in `playwright.config.ts`: `globalSetup: './global-setup.ts'`.
+   If you skip this, each worker prints a one-time `VOID_RUN_ID is not set` warning to stderr. Its files then carry their own run id, and log retention is turned off in that worker, so no worker can delete another's live files.
 4. In specs, import `test` and `expect` from `@aryan-vashishth/advanced-logger/playwright` instead of `@playwright/test`.
 5. Run your tests. Logs are written under `./logs/<date>/` (change with `VOID_LOG_DIR`).
 
@@ -91,10 +92,27 @@ globalSetup: './global-setup.ts'   // export default async () => { initRun(); }
 
 Files are written synchronously, one per Playwright worker (`...-w<index>.log`), so parallel workers never interleave and a crash loses nothing.
 
+Workers are identified by Playwright's `TEST_WORKER_INDEX`, one process per worker. Node `worker_threads` are not supported: a thread starts with a copy of its parent's environment, so it gets the same worker label (`main` outside Playwright) and appends to the same files as the code that started it, with nothing to tell their lines apart.
+
+### Telling parallel console output apart: consoleWorker, consoleTest
+
+With several workers, console lines from different tests interleave. Two opt-in prefixes say where each line came from (both off by default, so the console looks the same as in 0.2.0):
+
+```ts
+configure({ consoleWorker: true, consoleTest: true });
+// w1 │ logs in with a valid user │ 2026-10-13 16:25:06.083 │ INFO │ Click: Submit
+```
+
+- `consoleWorker` adds the worker (`w<index>`, or `main` outside Playwright), the same prefix every trace-file line already has.
+- `consoleTest` adds the running test's own title, cut to 40 characters. It needs the Playwright fixture (`test` from `@aryan-vashishth/advanced-logger/playwright`); lines logged outside a test have no test segment.
+- Both apply to the console only, including GitHub annotations. The trace files are already one file per worker with `TEST START` / `TEST END` around each test, and JSONL records already carry `worker` and the full `test` path.
+
 ## Configuration
 
-Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
-Code: `configure({ level, infoLogsCharLimit, maxLogFiles, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, attach, ... })`.
+Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
+Code: `configure({ level, infoLogsCharLimit, maxRuns, maxLogFiles, consoleWorker, consoleTest, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, attach, ... })`.
+
+`configure({...})` checks its patch the same way the config file is checked, but it never throws, since a logging option should not fail a test. An unknown option (such as a typo like `levl`) or a wrongly typed value prints one warning to stderr and is skipped; the rest of the patch still applies. The callback form, `configure((cfg) => ...)`, is not checked.
 
 The single theme (HIGH_CONTRAST) is on when ANSI is on: `enableAnsi()` / `disableAnsi()`.
 
@@ -134,13 +152,28 @@ Notes:
 - An invalid `VOID_LOG_LEVEL` is ignored, so it never overrides the config file.
 - `NO_COLOR` and `FORCE_COLOR` count as environment variables, so they beat `ansi` in the file. Terminal auto-detection does not: the file beats it.
 
-### Limiting how many log files are kept: maxLogFiles
+### Limiting how many logs are kept: maxRuns, maxLogFiles
 
-`maxLogFiles: 20` (or `VOID_LOG_MAX_FILES=20`) keeps at most 20 files in each of `partial-trace`, `debug-trace`, `full-trace` and `jsonl`, counted across all date folders. Older files (by modification time) are deleted, and date folders left empty are removed. Unset, `null` or `0` keeps everything (the default; an env value of `0` turns off a limit set in the config file).
+`maxRuns: 5` (or `VOID_LOG_MAX_RUNS=5`) keeps the 5 newest runs in each of `partial-trace`, `debug-trace`, `full-trace` and `jsonl`, counted across all date folders and including the current run. Older runs are deleted whole, never one worker's file at a time. A run's age is the modification time of its newest file. Date folders left empty are removed. Unset, `null` or `0` keeps everything (the default; an env value of `0` turns off a limit set in the config file).
 
-- The unit is files, not runs. Each run writes one file per Playwright worker, so with 4 workers a limit of 20 holds about 5 runs.
-- Files of the current run are never deleted, because parallel workers share one run id. If a run has more workers than the limit, that run's files exceed it.
-- Cleanup runs once per process, per kind, right after the first write, and is best effort: a failure never reaches your test. Only files named like this logger's output (`<kind>-*.log` / `.jsonl`) are touched, so other files in the log folder are safe.
+`maxLogFiles: 20` (or `VOID_LOG_MAX_FILES=20`) is the older setting and counts files instead: it keeps the 20 newest files per kind. Each run writes one file per worker, so with 4 workers it holds about 5 runs, and it can leave part of a run behind. Prefer `maxRuns`. If both are set, a file is deleted when either limit says so.
+
+Neither limit is a hard cap. These are never deleted:
+
+- The current run's files. Parallel workers share one run id, so a run with more workers than `maxLogFiles` exceeds it.
+- Any run with a file modified in the last hour. Another runner or CI shard writing to the same log folder at the same time may still be using it.
+- Anything, in a Playwright worker without a shared run id (`initRun()` was not called). Each worker would see its siblings' live files as an older run, so retention is off in that worker and it prints a warning instead.
+
+Cleanup runs once per process, per kind, right after the first write, and is best effort: a failure never reaches your test. Only files named like this logger's output (`<kind>-*.log` / `.jsonl`) are touched, so other files in the log folder are safe.
+
+### Redaction: redactKeys
+
+Values are masked as `***` when their **key** contains one of `redactKeys` (case-insensitive substring; the defaults cover `password`, `secret`, `token`, `authorization`, `apikey` and similar). This applies to structured output only: `fields(...)`, trees, rows and tables. Two gaps to know about:
+
+- Free text is not scanned, so `` info.log(`password is ${pw}`) `` prints the password in clear.
+- Only top-level keys are checked. A nested object is printed as JSON as it is, so `fields('user', { password: pw })` shows the password.
+
+Pass secrets as top-level fields, use `info.password(value)` (which prints one `*` per character), or keep them out of messages.
 
 ### Truncating long INFO logs: infoLogsCharLimit
 
@@ -186,9 +219,11 @@ With `ansi: true`:
 
 [ARCHITECTURE.md](ARCHITECTURE.md) describes the internals end to end: file layout, the dispatch pipeline, config layering, sinks, caller resolution and the Playwright fixture. It ships inside the npm package.
 
+[CHANGELOG.md](CHANGELOG.md) lists what changed in each version, including any change to defaults or output. It also ships in the package.
+
 ## Differences from the Java logger
 
 - Custom themes, `setTheme`, `tsWidth/levelWidth/actionWidth` and `traceArrow` are dropped (the width and arrow settings were never used by the renderer).
 - Caller frames from the logger's own folder are excluded by path. Java excluded frames by method-name prefix (`log`, `info`, ...), which also hides user methods such as `login()`; that is not reproduced.
 - No file rotation or gzip archives.
-- Added: secret redaction in fields/tables, JSONL sink, custom sinks (`addSink`), in-memory capture, Playwright fixture with log attachment, per-worker files.
+- Added: secret redaction in fields/tables, JSONL sink, custom sinks (`addSink`), in-memory capture, Playwright fixture with log attachment, per-worker files, run-based retention, worker and test prefixes on the console.

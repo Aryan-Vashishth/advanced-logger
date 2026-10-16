@@ -9,6 +9,7 @@ export {
   initRun,
   getRun,
   workerLabel,
+  runIdMissing,
   enableAnsi,
   disableAnsi,
   isAnsiEnabled,
