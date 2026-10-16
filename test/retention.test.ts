@@ -143,6 +143,54 @@ describe('recent runs', () => {
   });
 });
 
+describe('recentRunMinutes', () => {
+  const MIN = 1 / (24 * 60); // one minute, in seed()'s day units
+
+  it('aSmallerWindow_letsOlderRunsGo', () => {
+    const [fresh, older] = [
+      seed('2030-01-10', 'partial-trace', ['partial-trace-fresh-w0.log'], [2 * MIN])[0]!,
+      seed('2030-01-10', 'partial-trace', ['partial-trace-older-w0.log'], [15 * MIN])[0]!,
+    ];
+    configure({ maxRuns: 1, recentRunMinutes: 5 });
+    info.log('now');
+    expect(fs.existsSync(fresh)).toBe(true); // 2 min old, inside the 5-minute window
+    expect(fs.existsSync(older)).toBe(false); // 15 min old: protected by the default 60, not by 5
+  });
+
+  it('zero_turnsTheGuardOff_onlyTheCurrentRunIsKept', () => {
+    const fresh = seed('2030-01-10', 'partial-trace', ['partial-trace-fresh-w0.log'], [MIN])[0]!;
+    configure({ maxRuns: 1, recentRunMinutes: 0 });
+    info.log('now');
+    expect(fs.existsSync(fresh)).toBe(false);
+    expect(names('partial-trace')).toEqual(['partial-trace-current-run-main.log']);
+  });
+
+  it('default_is60', () => {
+    expect(resetConfig().recentRunMinutes).toBe(60);
+  });
+
+  it('env_setsIt_invalidIgnored', () => {
+    process.env.VOID_LOG_RECENT_RUN_MINUTES = '10';
+    expect(resetConfig().recentRunMinutes).toBe(10);
+    process.env.VOID_LOG_RECENT_RUN_MINUTES = '0';
+    expect(resetConfig().recentRunMinutes).toBe(0);
+    process.env.VOID_LOG_RECENT_RUN_MINUTES = 'soon';
+    expect(resetConfig().recentRunMinutes).toBe(60);
+  });
+
+  it('configFile_rejectsNegativeOrNonNumbers', async () => {
+    const { loadConfigFile } = await import('../src/configFile');
+    const load = (name: string, value: unknown): unknown => {
+      const f = path.join(tmp, name);
+      fs.writeFileSync(f, JSON.stringify({ recentRunMinutes: value }));
+      return loadConfigFile({ VOID_LOG_CONFIG: f }, tmp);
+    };
+    expect(load('r1.json', 15)).toEqual({ recentRunMinutes: 15 });
+    expect(() => load('r2.json', -1)).toThrow(/recentRunMinutes/);
+    expect(() => load('r3.json', '15')).toThrow(/recentRunMinutes/);
+  });
+});
+
 describe('maxRuns', () => {
   it('keepsTheNewestNRuns_includingTheCurrentOne_deletingWholeRuns', () => {
     const r1 = seed('2030-01-01', 'partial-trace', ['partial-trace-r1-w0.log', 'partial-trace-r1-w1.log'], [9, 9]);

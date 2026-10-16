@@ -1,6 +1,6 @@
 {
   "name": "@aryan-vashishth/advanced-logger",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Self-contained logger for Playwright/TypeScript. Port of VOID core.logging.",
   "repository": {
     "type": "git",
@@ -32,7 +32,8 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:e2e": "playwright test --config=test/playwright.config.ts",
-    "test": "npm run test:unit && npm run test:e2e"
+    "test": "npm run test:unit && npm run test:e2e",
+    "sweep": "playwright test --config=test/sweep/playwright.sweep.config.ts"
   },
   "peerDependencies": {
     "@playwright/test": ">=1.40.0"

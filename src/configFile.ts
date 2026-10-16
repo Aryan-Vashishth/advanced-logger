@@ -108,6 +108,8 @@ const KEYS: Record<keyof LogConfigPatch, [check: (v: unknown) => boolean, expect
   infoLogsCharLimit: [(v) => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0), 'a number >= 0 or null'],
   maxLogFiles: [(v) => v === null || (Number.isInteger(v) && (v as number) >= 0), 'an integer >= 0 or null'],
   maxRuns: [(v) => v === null || (Number.isInteger(v) && (v as number) >= 0), 'an integer >= 0 or null'],
+  recentRunMinutes: [(v) => typeof v === 'number' && Number.isFinite(v) && v >= 0, 'a number >= 0'],
+  redactText: [bool, 'a boolean'],
   consoleWorker: [bool, 'a boolean'],
   consoleTest: [bool, 'a boolean'],
   callerColor: [bool, 'a boolean'],
@@ -127,25 +129,31 @@ const KEYS: Record<keyof LogConfigPatch, [check: (v: unknown) => boolean, expect
   attach: [oneOf('on-failure', 'always', 'never'), "one of 'on-failure' | 'always' | 'never'"],
 };
 
-const FILE_KEYS = ['debugTrace', 'partialTrace', 'fullTrace', 'jsonl'];
+const FILE_KEYS = ['debugTrace', 'partialTrace', 'fullTrace', 'jsonl', 'tables'];
 
 /**
  * Check a patch against KEYS. Every unknown key or wrong-typed value becomes a message naming `where`, and is left
  * out of the returned patch; undefined values are dropped. Shared by config files (which throw on the first problem)
  * and configure() (which warns and carries on).
  */
-export function checkPatch(value: Record<string, unknown>, where: string): { patch: LogConfigPatch; problems: string[] } {
+export interface PatchProblem {
+  /** The offending option: 'level', or 'files.jsonl' for a files entry. */
+  key: string;
+  message: string;
+}
+
+export function checkPatch(value: Record<string, unknown>, where: string): { patch: LogConfigPatch; problems: PatchProblem[] } {
   const out: Record<string, unknown> = {};
-  const problems: string[] = [];
+  const problems: PatchProblem[] = [];
   for (const [key, v] of Object.entries(value)) {
     if (v === undefined) continue;
     const rule = (KEYS as Record<string, [(v: unknown) => boolean, string] | undefined>)[key];
     if (!rule) {
-      problems.push(`[advanced-logger] ${where} has an unknown option '${key}'. Valid options: ${Object.keys(KEYS).join(', ')}.`);
+      problems.push({ key, message: `[advanced-logger] ${where} has an unknown option '${key}'. Valid options: ${Object.keys(KEYS).join(', ')}.` });
       continue;
     }
     if (!rule[0](v)) {
-      problems.push(`[advanced-logger] ${where}: option '${key}' must be ${rule[1]} (got ${describe(v)}).`);
+      problems.push({ key, message: `[advanced-logger] ${where}: option '${key}' must be ${rule[1]} (got ${describe(v)}).` });
       continue;
     }
     if (key === 'files') {
@@ -153,7 +161,7 @@ export function checkPatch(value: Record<string, unknown>, where: string): { pat
       for (const [fk, fv] of Object.entries(v as Record<string, unknown>)) {
         if (fv === undefined) continue;
         if (!FILE_KEYS.includes(fk) || typeof fv !== 'boolean') {
-          problems.push(`[advanced-logger] ${where}: option 'files.${fk}' must be a boolean and one of ${FILE_KEYS.join(', ')}.`);
+          problems.push({ key: `files.${fk}`, message: `[advanced-logger] ${where}: option 'files.${fk}' must be a boolean and one of ${FILE_KEYS.join(', ')}.` });
           continue;
         }
         files[fk] = fv;
@@ -172,7 +180,7 @@ function validatePatch(value: unknown, file: string, hint: string): LogConfigPat
     throw new Error(`[advanced-logger] Config file ${file} has an invalid shape: ${hint} (got ${describe(value)}).`);
   }
   const { patch, problems } = checkPatch(value, `Config file ${file}`);
-  if (problems.length > 0) throw new Error(problems[0]);
+  if (problems.length > 0) throw new Error(problems[0]!.message);
   return patch;
 }
 

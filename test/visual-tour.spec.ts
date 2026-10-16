@@ -125,22 +125,22 @@ test.describe('data visuals: grid + table', () => {
 
   test('table: empty array -> "No rows to display."', () => {
     banner('TABLE: empty array');
-    info.table([]);
+    info.table([], 'Empty');
   });
 
   test('table: empty object -> "No data to display."', () => {
     banner('TABLE: empty object');
-    info.table({});
+    info.table({}, 'Empty object');
   });
 
   test('table: null -> "No rows to display."', () => {
     banner('TABLE: null');
-    info.table(null);
+    info.table(null, 'Null');
   });
 
-  test('table: single row object, no title', () => {
-    banner('TABLE: single row, no title');
-    info.table({ ID: 1, Name: 'Alice', Role: 'Admin' });
+  test('table: single row object', () => {
+    banner('TABLE: single row');
+    info.table({ ID: 1, Name: 'Alice', Role: 'Admin' }, 'Single row');
   });
 
   test('table: multi-row with a title', () => {
@@ -157,23 +157,23 @@ test.describe('data visuals: grid + table', () => {
 
   test('table: heterogeneous rows (missing columns render blank)', () => {
     banner('TABLE: heterogeneous rows');
-    info.table([{ ID: 1, Name: 'Alice' }, { ID: 2, Name: 'Bob', Note: 'late signup' }]);
+    info.table([{ ID: 1, Name: 'Alice' }, { ID: 2, Name: 'Bob', Note: 'late signup' }], 'Heterogeneous');
   });
 
   test('table: a Map as a single row', () => {
     banner('TABLE: Map row');
-    info.table(fields('ID', 1, 'Name', 'Alice'));
+    info.table(fields('ID', 1, 'Name', 'Alice'), 'Map row');
   });
 
   test('table: sensitive keys are redacted', () => {
     banner('TABLE: redaction');
-    info.table({ user: 'bob', password: 'hunter2', apiToken: 'abc-123' });
+    info.table({ user: 'bob', password: 'hunter2', apiToken: 'abc-123' }, 'Redacted');
   });
 
   test('table: cell truncation at a tight limit', () => {
     banner('TABLE: cell truncation (limit=10)');
     setTableCellLimit(10);
-    info.table({ Bio: 'This value is much longer than the configured cell limit' });
+    info.table({ Bio: 'This value is much longer than the configured cell limit' }, 'Truncated');
     disableTableCellLimit();
   });
 

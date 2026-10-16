@@ -14,7 +14,7 @@ npm install @aryan-vashishth/advanced-logger
 Pin an exact version if you want reproducible installs:
 
 ```bash
-npm install @aryan-vashishth/advanced-logger@0.3.0
+npm install @aryan-vashishth/advanced-logger@0.4.0
 ```
 
 Requirements:
@@ -89,8 +89,42 @@ globalSetup: './global-setup.ts'   // export default async () => { initRun(); }
 | `logs/<date>/debug-trace/` | Every level, plain text, caller suffix |
 | `logs/<date>/full-trace/` | Every level, plain text, `[CHAIN]` suffix |
 | `logs/<date>/jsonl/` | One JSON record per call (opt-in: `VOID_LOG_JSONL=1`) |
+| `logs/<date>/attachments/csv/` | One CSV file per logged table (on by default, see below) |
+| `logs/<date>/attachments/json/` | One JSON file per logged table |
 
 Files are written synchronously, one per Playwright worker (`...-w<index>.log`), so parallel workers never interleave and a crash loses nothing.
+
+### Table attachments: CSV and JSON copies of every table
+
+Every table you log also gets a CSV and a JSON file, so you can open the data in a spreadsheet or read it from code. A table needs a title, which is shown above it and names its files:
+
+```ts
+info.table(rows, 'Order lines');
+```
+
+```
+logs/2026-10-16/
+  partial-trace/partial-trace-20261016-101500-123-pid4242-w1.log      ← the parent log (also in debug-trace, full-trace)
+  attachments/
+    csv/20261016-101500-123-pid4242-w1/                               ← one folder per parent log
+      001-users.csv
+      002-order-lines.csv
+    json/20261016-101500-123-pid4242-w1/
+      001-users.json
+      002-order-lines.json
+```
+
+- **One folder per parent log.** Each worker's trace files are named `<kind>-<runId>-<worker>.log`, and that worker's tables go in the folder `<runId>-<worker>` under both `csv/` and `json/`.
+- **File names are the number and the title.** `<NNN>-<title>`: `<NNN>` counts tables in that worker, in log order, so files sort the way they were logged. The title is lowercased and anything other than letters and digits becomes `-` (letters of any script are kept, so `Пользователи` stays readable). It is cut at 40 characters, and a title with no letters or digits becomes `table`. A number whose file already exists is skipped, never overwritten.
+- **The title is required.** In TypeScript, `info.table(rows)` without a title no longer compiles. From plain JavaScript (or older compiled code), it still works: the table renders without a title row, its files are named `untitled`, and a one-time warning asks for a title. `info.log(object)`, which renders a table with no title row, names its files `log`; the tables of a logged list are named `list-item-0`, `list-item-1` and so on.
+- **The logs point to the files.** After each table, debug-trace and full-trace get a line naming both files: `TABLE FILES │ attachments/csv/<runId>-<worker>/002-order-lines.csv | attachments/json/<runId>-<worker>/002-order-lines.json`. It is a DEBUG line, so the console and partial-trace show it only at `level: 'debug'`.
+- **Full values.** Cells are never cut short in the files, even when `tableCellLimit` shortens them on the console.
+- **Same redaction as the console.** Sensitive keys are masked at any depth, and with `redactText` so is sensitive text inside cells and the title.
+- **CSV:** UTF-8 with a byte-order mark (so Excel shows non-ASCII text correctly), a header row, CRLF line ends, and RFC 4180 quoting. Objects and arrays are written as JSON text. A text cell starting with `=`, `+`, `-` or `@` gets a leading `'`, so a spreadsheet does not run it as a formula (plain negative numbers are left alone).
+- **JSON:** `{ title, time, level, worker, runId, test, columns, rows }`. `test` is the full test path when the Playwright fixture is in use.
+- Written for tables at every level, like debug-trace. Empty tables and `table("text")` lines write nothing.
+- `maxRuns` deletes a run's attachment folders along with its logs. `maxLogFiles` does not count them.
+- Turn it off with `files: { tables: false }` or `VOID_LOG_TABLES=0`.
 
 Workers are identified by Playwright's `TEST_WORKER_INDEX`, one process per worker. Node `worker_threads` are not supported: a thread starts with a copy of its parent's environment, so it gets the same worker label (`main` outside Playwright) and appends to the same files as the code that started it, with nothing to tell their lines apart.
 
@@ -109,10 +143,10 @@ configure({ consoleWorker: true, consoleTest: true });
 
 ## Configuration
 
-Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
-Code: `configure({ level, infoLogsCharLimit, maxRuns, maxLogFiles, consoleWorker, consoleTest, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, attach, ... })`.
+Environment: `VOID_LOG_LEVEL` (debug/info/warn/error/off), `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_TABLES`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_RECENT_RUN_MINUTES`, `VOID_LOG_REDACT_TEXT`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, plus standard `NO_COLOR` / `FORCE_COLOR`. Boolean variables accept `1/true/yes/on` and `0/false/no/off`.
+Code: `configure({ level, infoLogsCharLimit, maxRuns, maxLogFiles, recentRunMinutes, consoleWorker, consoleTest, ansi, fg, bg, callerColor, tsFormat, segmentDivider, tableCellLimit, tableCellLimitEnabled, files, console, redactKeys, redactText, attach, ... })`.
 
-`configure({...})` checks its patch the same way the config file is checked, but it never throws, since a logging option should not fail a test. An unknown option (such as a typo like `levl`) or a wrongly typed value prints one warning to stderr and is skipped; the rest of the patch still applies. The callback form, `configure((cfg) => ...)`, is not checked.
+`configure()` checks what you pass the same way the config file is checked, but it never throws, since a logging option should not fail a test. An unknown option (such as a typo like `levl`) or a wrongly typed value prints one warning to stderr and is skipped; everything else still applies. This covers both forms: with a patch, `configure({...})`, a bad option is not applied; with a callback, `configure((cfg) => ...)`, a bad change is undone (the option goes back to its value from before the call, and an unknown one is removed). In a callback you may also assign an array to `suppressContains`, `suppressMethodPrefixes` or `includeOnlyPrefixes`; it is turned into a Set.
 
 The single theme (HIGH_CONTRAST) is on when ANSI is on: `enableAnsi()` / `disableAnsi()`.
 
@@ -161,19 +195,30 @@ Notes:
 Neither limit is a hard cap. These are never deleted:
 
 - The current run's files. Parallel workers share one run id, so a run with more workers than `maxLogFiles` exceeds it.
-- Any run with a file modified in the last hour. Another runner or CI shard writing to the same log folder at the same time may still be using it.
+- Any run with a file modified in the last `recentRunMinutes` (default 60; env `VOID_LOG_RECENT_RUN_MINUTES`). Another runner or CI shard writing to the same log folder at the same time may still be using it. Set it to `0` to protect only the current run, for example when nothing else ever writes to the folder.
 - Anything, in a Playwright worker without a shared run id (`initRun()` was not called). Each worker would see its siblings' live files as an older run, so retention is off in that worker and it prints a warning instead.
 
 Cleanup runs once per process, per kind, right after the first write, and is best effort: a failure never reaches your test. Only files named like this logger's output (`<kind>-*.log` / `.jsonl`) are touched, so other files in the log folder are safe.
 
-### Redaction: redactKeys
+### Redaction: redactKeys, redactText
 
-Values are masked as `***` when their **key** contains one of `redactKeys` (case-insensitive substring; the defaults cover `password`, `secret`, `token`, `authorization`, `apikey` and similar). This applies to structured output only: `fields(...)`, trees, rows and tables. Two gaps to know about:
+A key is sensitive when it contains one of `redactKeys` (case-insensitive substring). The defaults cover `password`, `passwd`, `secret`, `token`, `authorization`, `apikey` and `api_key`. Sensitive values print as `***` in two ways:
 
-- Free text is not scanned, so `` info.log(`password is ${pw}`) `` prints the password in clear.
-- Only top-level keys are checked. A nested object is printed as JSON as it is, so `fields('user', { password: pw })` shows the password.
+- **Structured values**, always: in `fields(...)`, trees, rows and tables, at any depth. `fields('user', { name: 'ann', password: pw })` prints `{"name":"ann","password":"***"}`. Nested objects, arrays and Maps are all checked, a `toJSON()` result is checked too, and your object is never modified.
+- **Free text**, with `redactText: true` (the default; env `VOID_LOG_REDACT_TEXT`): any message, label text included. Masked forms are `key=value`, `key: value`, `"key":"value"` and `'key': 'value'` where the key contains a sensitive word, plus `Bearer <token>` and `Basic <credentials>`. The value ends at whitespace or `,` `;` `&` `"` `'` `}` `]`.
 
-Pass secrets as top-level fields, use `info.password(value)` (which prints one `*` per character), or keep them out of messages.
+```
+info.log('GET /api?access_token=abc123&page=2')   →  GET /api?access_token=***&page=2
+info.log('Authorization: Bearer eyJhbGciOi...')   →  Authorization: Bearer ***
+```
+
+Masking happens once, before anything is written, so the console, every trace file, JSONL and the Playwright attachment all get the masked text.
+
+Limits of free-text masking:
+
+- It is pattern-based, so it can miss a secret with no key next to it (`` `logged in as ann / hunter2` ``) and can mask a harmless value whose key contains a sensitive word (`tokens=3` prints `tokens=***`). Prefer passing secrets as fields, or `info.password(value)`, which prints one `*` per character.
+- A value with spaces is masked only up to the first space.
+- Set `redactText: false` to turn it off. Structured redaction stays on.
 
 ### Truncating long INFO logs: infoLogsCharLimit
 
@@ -197,7 +242,7 @@ DEBUG │ <the full 259 characters, no limit>
 | Option | Env | Default | Controls |
 |---|---|---|---|
 | `ansi` | `VOID_LOG_ANSI` | auto-detected | Master switch. `false` means no escape codes at all, whatever the other flags say. |
-| `fg` | `VOID_LOG_FG` | `true` | Foreground colors: the text color per intent, and the level color on plain `log` lines. Bold goes with it. |
+| `fg` | `VOID_LOG_FG` | `true` | Foreground colors: each action's own color, and the level color on plain `log` lines. Bold goes with it. |
 | `bg` | `VOID_LOG_BG` | `true` | The theme background. |
 | `callerColor` | none | `false` | Colors the caller suffix separately (console, debug level). |
 
@@ -205,15 +250,45 @@ With `ansi: true`:
 
 | `fg` | `bg` | Console line |
 |---|---|---|
-| true | true | foreground + background (the 0.1.0 output) |
+| true | true | foreground + background (the default) |
 | true | false | foreground only |
 | false | true | background only |
 | false | false | no escape codes on the line body |
 
 - The background is a single color for every level. There is no per-level background; the level only picks the foreground, and only on plain `log` lines.
+- See [Action colors](#action-colors) below for which color each action uses.
 - `callerColor` is its own opt-in and is **not** gated by `fg`/`bg`. With `fg: false, bg: false, callerColor: true` the body is bare and only the caller suffix is colored. `ansi: false` silences it too.
 - Tables, trees, rows and every action follow the same flags, including the table title's bold. Plain-text file sinks (partial, debug and full traces, JSONL) never contain escape codes.
 - Runtime switches: `enableFg()` / `disableFg()` / `isFgEnabled()` and the `Bg` equivalents.
+
+### Action colors
+
+Every action has its own foreground color, so a `click` line and an `input` line look different. Colors are grouped by what the action does, so the hue still tells you the kind of line at a glance:
+
+| Kind | Hue | Actions |
+|---|---|---|
+| Interaction | blues, from cyan-blue to indigo | `click`, `hover`, `checkbox`, `toggle`, `dropdown`, `input`, `text`, `password`, `clear`, `key`, `upload` |
+| Navigation | teals | `navigate`, `tab`, `frame`, `breadcrumb` |
+| Observation | pinks and magentas | `wait`, `search`, `result` |
+| Verification | gold | `verifying` |
+| Data | violets | `grid`, `table`, `row` |
+| Success | greens | `success`, `complete`, `resolved` |
+| Alert | reds and oranges (`skip` is muted) | `failed`, `error`, `timeout`, `validation`, `fallback`, `skip` |
+
+- Plain `log` lines keep their level's color: INFO white, WARN amber, ERROR red, DEBUG grey. `failed` uses the same red as ERROR.
+- A table's title row and column-name row are a darker shade of the table's violet (`TABLE_HEADER_FG`), so the header stands apart from the data rows. Borders and data rows keep the table color. A title longer than the table widens the table instead of being cut.
+- An action's color does not depend on the level: `warn.click()` and `info.click()` look the same, as before.
+- Every color has at least 4.5:1 contrast on a dark terminal background (`#1e1e1e`). Colors within one kind are at least 10 apart in CIEDE2000 color difference, and colors of different kinds at least 12, so neighbors stay distinguishable. A test enforces these limits.
+- The colors are 24-bit, so they need a truecolor terminal (VS Code, Windows Terminal, iTerm2 and most modern terminals). Each color is exported as `ACTION_FG`.
+
+## Development
+
+From a clone of this repository:
+
+| Command | What it does |
+|---|---|
+| `npm test` | Unit tests (vitest), then the Playwright e2e specs |
+| `npm run sweep` | Manual check of everything at once: prints every console style (each action's color, levels, tables, redaction, truncation, the color toggles, two workers in parallel), writes every file kind to `./logs` (or `VOID_LOG_DIR`) like any run, without deleting anything there, then lists this run's files with a preview of each and runs automatic checks on them (only this run's files, found by its run id) (no secrets or escape codes in any file, one CSV and JSON per table, names matching the trace files). It fails if a check fails; the console part is for you to look at. |
 
 ## More documentation
 

@@ -86,7 +86,7 @@ describe('hostile payloads', () => {
   it('nullPrototypeObject_isTreatedAsARecord', () => {
     const o = Object.create(null) as Record<string, unknown>;
     o.id = 7;
-    info.table(o);
+    info.table(o, 'T');
     expect(out.join('')).toContain('id');
     expect(out.join('')).toContain('7');
   });
@@ -104,14 +104,14 @@ describe('hostile payloads', () => {
   });
 
   it('heterogeneousTableRows_missingColumnsRenderBlank', () => {
-    info.table([{ a: 1, b: 2 }, { a: 3 }]);
+    info.table([{ a: 1, b: 2 }, { a: 3 }], 'T');
     const text = out.join('');
     expect(text).toContain('| a |');
     expect(text).toContain('b');
   });
 
   it('tableRowsAsMaps_renderLikeObjectRows', () => {
-    info.table([fields('ID', 1, 'Name', 'Alice')]);
+    info.table([fields('ID', 1, 'Name', 'Alice')], 'T');
     const text = out.join('');
     expect(text).toContain('| ID | Name  |');
     expect(text).toContain('| 1  | Alice |');
@@ -143,9 +143,12 @@ describe('redaction is not fooled by casing or key aliases', () => {
     expect(text).not.toContain('abc123');
   });
 
-  it('redaction_onlyAffectsTreeAndTableNotRawLogStrings', () => {
-    // Documents current behavior: redaction only applies to structured fields/tables,
-    // a raw string that happens to contain a secret is passed through verbatim.
+  it('rawLogStrings_areMaskedByRedactText_andPassThroughWhenItIsOff', () => {
+    info.log('password=hunter2');
+    expect(out.join('')).not.toContain('hunter2');
+    expect(out.join('')).toContain('password=***');
+    out.length = 0;
+    configure({ redactText: false });
     info.log('password=hunter2');
     expect(out.join('')).toContain('hunter2');
   });
@@ -195,7 +198,7 @@ describe('table cell limit guardrails', () => {
   it('setTableCellLimit_belowMinimum_clampsToFour', () => {
     configure({ tableCellLimitEnabled: false });
     setTableCellLimit(0);
-    info.table({ K: 'abcdefghij' });
+    info.table({ K: 'abcdefghij' }, 'T');
     expect(out.join('')).toContain('a...');
   });
 });

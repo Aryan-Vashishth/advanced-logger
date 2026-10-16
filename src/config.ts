@@ -13,6 +13,11 @@ export interface FileToggles {
   fullTrace: boolean;
   /** One structured JSON record per log call (QoL addition, off by default). */
   jsonl: boolean;
+  /**
+   * For every rendered table, a CSV and a JSON copy at <logDir>/<date>/attachments/{csv,json}/<runId>-<worker>/
+   * <NNN>-<title>.{csv,json}: one folder per parent log. Full cell values (no tableCellLimit), redacted like the console.
+   */
+  tables: boolean;
 }
 
 export interface LogConfig {
@@ -26,15 +31,20 @@ export interface LogConfig {
   bg: boolean;
   /**
    * Max log files kept per trace kind (partial-trace, debug-trace, full-trace, jsonl); older ones are deleted by
-   * mtime. Files of the current run, and of any run written to in the last hour, are never deleted, so this is not a
-   * hard cap. null (or 0) keeps everything. Prefer maxRuns: a file count can keep part of a parallel run.
+   * mtime. Files of the current run, and of any run written to in the last recentRunMinutes, are never deleted, so
+   * this is not a hard cap. null (or 0) keeps everything. Prefer maxRuns: a file count can keep part of a parallel run.
    */
   maxLogFiles: number | null;
   /**
    * Max runs kept per trace kind, the current run included. Older runs are deleted whole, oldest first. A run written
-   * to in the last hour is never deleted. null (or 0) keeps everything.
+   * to in the last recentRunMinutes is never deleted. null (or 0) keeps everything.
    */
   maxRuns: number | null;
+  /**
+   * Retention never deletes a run with a file modified this many minutes ago or less (another runner or CI shard may
+   * still be writing it). Default 60. 0 turns the guard off, so only the current run is protected.
+   */
+  recentRunMinutes: number;
   /**
    * Max chars for an INFO log (tables excluded). Longer ones print truncated with the total char count, followed by a
    * WARN and a DEBUG line holding the full text. null (or 0) means no limit.
@@ -63,8 +73,13 @@ export interface LogConfig {
   logDir: string;
   /** Emit ::error:: / ::warning:: workflow commands when running under GitHub Actions. */
   githubAnnotations: boolean;
-  /** Mask values of these field keys (case-insensitive substring match) in tree/table/row output. */
+  /** Mask values of these field keys (case-insensitive substring match) in tree/table/row output, at any depth. */
   redactKeys: string[];
+  /**
+   * Also mask secrets written into message text: `key=value`, `key: value` and `"key":"value"` where the key contains
+   * one of redactKeys, plus `Bearer <token>` / `Basic <credentials>`. Applies to every sink.
+   */
+  redactText: boolean;
   /** Playwright integration: when to attach the per-test log to the report. */
   attach: AttachPolicy;
 }
@@ -118,6 +133,7 @@ function builtinDefaults(env: NodeJS.ProcessEnv): LogConfig {
     infoLogsCharLimit: null,
     maxLogFiles: null,
     maxRuns: null,
+    recentRunMinutes: 60,
     consoleWorker: false,
     consoleTest: false,
     callerColor: false,
@@ -135,10 +151,12 @@ function builtinDefaults(env: NodeJS.ProcessEnv): LogConfig {
       partialTrace: true,
       fullTrace: true,
       jsonl: false,
+      tables: true,
     },
     logDir: './logs',
     githubAnnotations: env.GITHUB_ACTIONS === 'true',
     redactKeys: ['password', 'passwd', 'secret', 'token', 'authorization', 'apikey', 'api_key'],
+    redactText: true,
     attach: 'on-failure',
   };
 }
@@ -150,6 +168,8 @@ function applyEnv(cfg: LogConfig, env: NodeJS.ProcessEnv): void {
   if (env.VOID_LOG_DIR) cfg.logDir = env.VOID_LOG_DIR;
   const ansi = explicitAnsi(env);
   if (ansi !== undefined) cfg.ansi = ansi;
+  const tables = envBool(env.VOID_LOG_TABLES);
+  if (tables !== undefined) cfg.files.tables = tables;
   const jsonl = envBool(env.VOID_LOG_JSONL);
   if (jsonl !== undefined) cfg.files.jsonl = jsonl;
   const trunc = env.VOID_LOG_INFO_LOGS_CHAR_LIMIT?.trim();
@@ -161,6 +181,10 @@ function applyEnv(cfg: LogConfig, env: NodeJS.ProcessEnv): void {
   if (maxFiles && /^\d+$/.test(maxFiles)) cfg.maxLogFiles = Number(maxFiles) > 0 ? Number(maxFiles) : null;
   const maxRuns = env.VOID_LOG_MAX_RUNS?.trim();
   if (maxRuns && /^\d+$/.test(maxRuns)) cfg.maxRuns = Number(maxRuns) > 0 ? Number(maxRuns) : null;
+  const recent = env.VOID_LOG_RECENT_RUN_MINUTES?.trim();
+  if (recent && /^\d+$/.test(recent)) cfg.recentRunMinutes = Number(recent);
+  const redactText = envBool(env.VOID_LOG_REDACT_TEXT);
+  if (redactText !== undefined) cfg.redactText = redactText;
   const fg = envBool(env.VOID_LOG_FG);
   if (fg !== undefined) cfg.fg = fg;
   const bg = envBool(env.VOID_LOG_BG);
@@ -234,15 +258,17 @@ const WARNED = new Set<string>();
 
 /**
  * Merge a patch, or mutate in place with a callback. Set-typed fields accept arrays in a patch.
- * A patch is checked like a config file, but a problem never throws (a logger must not fail a test): an unknown
- * option or a wrong-typed value prints one stderr warning and is skipped, and the rest of the patch still applies.
+ * Both forms are checked like a config file, but a problem never throws (a logger must not fail a test): an unknown
+ * option or a wrong-typed value prints one stderr warning and is skipped, and the rest still applies. For the
+ * callback, "skipped" means the bad option is put back to its value from before the call (an unknown one removed).
  */
 export function configure(patch: LogConfigPatch | ((cfg: LogConfig) => void)): LogConfig {
   const cur = config();
   if (typeof patch === 'function') {
-    const before = cur.infoLogsCharLimit;
+    const before = cloneConfig(cur);
     patch(cur);
-    if (cur.infoLogsCharLimit !== before) LIMIT_SOURCE = 'code';
+    checkLive(cur, before);
+    if (cur.infoLogsCharLimit !== before.infoLogsCharLimit) LIMIT_SOURCE = 'code';
     return cur;
   }
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
@@ -250,14 +276,38 @@ export function configure(patch: LogConfigPatch | ((cfg: LogConfig) => void)): L
     return cur;
   }
   const checked = checkPatch(patch as Record<string, unknown>, 'configure()');
-  for (const p of checked.problems) warnOnce(`${p} Skipped.`);
+  for (const p of checked.problems) warnOnce(`${p.message} Skipped.`);
   patch = checked.patch;
   applyPatch(cur, patch);
   if (patch.infoLogsCharLimit !== undefined) LIMIT_SOURCE = 'code';
   return cur;
 }
 
-function warnOnce(msg: string): void {
+const SET_KEYS = ['suppressContains', 'suppressMethodPrefixes', 'includeOnlyPrefixes'] as const;
+
+/** After a configure() callback: warn about and undo each invalid change, so the live config stays well-formed. */
+function checkLive(cur: LogConfig, before: LogConfig): void {
+  const live = cur as unknown as Record<string, unknown>;
+  // An array is a valid value for the Set-typed options (as in a patch), but the live config needs a real Set.
+  for (const k of SET_KEYS) if (Array.isArray(live[k])) live[k] = new Set(live[k] as string[]);
+  for (const p of checkPatch(live, 'configure() callback').problems) {
+    warnOnce(`${p.message} Reverted.`);
+    const [top, sub] = p.key.split('.') as [string, string | undefined];
+    const prev = before as unknown as Record<string, unknown>;
+    if (sub !== undefined) {
+      const files = cur.files as unknown as Record<string, unknown>;
+      if (sub in before.files) files[sub] = (before.files as unknown as Record<string, unknown>)[sub];
+      else delete files[sub];
+    } else if (top in prev) {
+      live[top] = prev[top];
+    } else {
+      delete live[top];
+    }
+  }
+}
+
+/** Print a warning to stderr once per process (reset by resetConfig()). Internal: used for misuse that must not throw. */
+export function warnOnce(msg: string): void {
   if (WARNED.has(msg)) return;
   WARNED.add(msg);
   process.stderr.write(msg + '\n');

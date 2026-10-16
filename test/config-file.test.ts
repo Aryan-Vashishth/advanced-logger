@@ -47,7 +47,7 @@ describe('discovery', () => {
       attach: 'on-failure',
       tableCellLimit: 40,
     });
-    expect(c.files).toEqual({ debugTrace: true, partialTrace: true, fullTrace: true, jsonl: false });
+    expect(c.files).toEqual({ debugTrace: true, partialTrace: true, fullTrace: true, jsonl: false, tables: true });
   });
 
   it('searchOrder_isTsJsCjsJson', () => {
@@ -82,7 +82,7 @@ describe('file forms', () => {
     const c = resetConfig();
     expect(c.level).toBe('debug');
     expect(c.callerColor).toBe(true);
-    expect(c.files).toEqual({ debugTrace: true, partialTrace: true, fullTrace: true, jsonl: true });
+    expect(c.files).toEqual({ debugTrace: true, partialTrace: true, fullTrace: true, jsonl: true, tables: true });
     expect(c.redactKeys).toEqual(['pin']);
     expect([...c.suppressContains]).toEqual(['vendor']);
   });

@@ -2,6 +2,34 @@
 
 All notable changes to `@aryan-vashishth/advanced-logger`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a minor release may add options but keeps existing defaults and output unchanged unless noted.
 
+## [0.4.0] - 2026-10-16
+
+Gives every action its own console color, writes every logged table to CSV and JSON files, and closes three redaction gaps. **Default console colors change**, **`table()` now requires a title in TypeScript**, secrets in message text are now masked by default, and each logged table now also creates two files. Trace files and JSONL have no colors, so only the masking affects them.
+
+### Changed
+
+- **Every action has its own console color.** Before, all 11 interaction actions (`click`, `input`, `text`, ...) shared one color, the same bold white as a plain INFO line. Now each action has a distinct color within a hue family for its kind: interactions in blues, navigation in teals, observation in pinks, verification in gold, data in violets, success in greens, alerts in reds and oranges (`skip` is muted). Plain `log` lines keep their level's color. Every color has at least 4.5:1 contrast on a dark terminal and is clearly distinct from its neighbors; `palette.test.ts` enforces both.
+- The ERROR level red (and the `failed` action, which shares it) is brighter: (248,75,75) instead of (210,48,48), which was under 4.5:1 contrast on a dark terminal.
+- **Breaking for TypeScript: `table(rows, title)` requires a title**, which is shown above the table and names its files. `info.table(rows)` without one no longer compiles. At runtime it still works (plain JavaScript, older compiled code): the table renders without a title row, its files are named `untitled`, and a one-time warning asks for a title. `info.log(object)` keeps rendering without a title row and names its files `log`; a logged list's tables are `list-item-N`.
+- A table's title row and column-name row are a darker shade of the table's violet (`TABLE_HEADER_FG`, exported), so the header stands apart from the data rows.
+- **Structured redaction works at any depth.** `fields('user', { password })` now prints `"password":"***"`; before, a nested object printed in clear. Arrays, Maps and `toJSON()` results are checked too, and the caller's object is never modified.
+- `configure((cfg) => ...)` callbacks are now checked like `configure({...})`. An unknown option or wrong-typed value set in the callback prints one warning and is undone. An array assigned to a Set-typed option (`suppressContains`, `suppressMethodPrefixes`, `includeOnlyPrefixes`) becomes a Set.
+
+### Added
+
+- **Table attachments** (`files.tables`, default `true`, env `VOID_LOG_TABLES`): every logged table also gets a CSV and a JSON file, in one folder per parent log: `<logDir>/<date>/attachments/csv/<runId>-<worker>/<NNN>-<title>.csv` and the same under `attachments/json/`. The folder `<runId>-<worker>` matches the trace files (`<kind>-<runId>-<worker>.log`) the table appears in, `<NNN>` keeps log order, and a DEBUG `TABLE FILES` line after each table in debug-trace and full-trace names both files. Cells hold full values (no `tableCellLimit`) and are redacted like the console. CSV is UTF-8 with a BOM, CRLF line ends and RFC 4180 quoting, and text cells that a spreadsheet would run as a formula get a leading `'`. JSON holds the title, time, level, worker, run id, test, columns and rows. `maxRuns` deletes a run's attachment folders with its logs.
+- `LogEvent.table` (`TableData`): a rendered table's rows as data, for custom sinks. `tableFilePath()` is exported.
+- `redactText` option (default `true`, env `VOID_LOG_REDACT_TEXT`): masks secrets in free text, in `key=value`, `key: value`, `"key":"value"` and `'key': 'value'` forms where the key contains one of `redactKeys`, plus `Bearer` and `Basic` credentials. It runs once before every output, including the Playwright attachment. It is pattern-based, so it can miss a secret with no key next to it and can mask a harmless value whose key contains a sensitive word (`tokens=3`).
+- `recentRunMinutes` option (default `60`, env `VOID_LOG_RECENT_RUN_MINUTES`): how recently a run must have been written to for retention to keep it. Before, this was a fixed hour. `0` protects only the current run.
+- `ACTION_FG` (the per-action colors) and the `LogAction` type are exported.
+- `LogActions.msg()` takes an optional action name, which picks that action's color.
+
+### Fixed
+
+- A blank entry in `redactKeys` (such as `''`) no longer masks every structured value. Blank entries are ignored, as free-text masking already did.
+- A table title longer than the table was cut off on the console. The table now widens to fit it.
+- A table title no longer ends with a full style reset, which dropped the background for the rest of that line.
+
 ## [0.3.0] - 2026-10-14
 
 Makes mixed logs from parallel runs separable, and stops a missing setup step from scattering or deleting logs. Console and file output are unchanged unless you turn on the new options.
@@ -68,6 +96,7 @@ First release on npm. A self-contained TypeScript port of the VOID `core.logging
 - `initRun()` to share one run id across Playwright workers via `VOID_RUN_ID` / `VOID_RUN_DATE`.
 - Environment variables `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_JSONL` and `VOID_RUN_ID`, and `configure()` for code.
 
+[0.4.0]: https://www.npmjs.com/package/@aryan-vashishth/advanced-logger/v/0.4.0
 [0.3.0]: https://www.npmjs.com/package/@aryan-vashishth/advanced-logger/v/0.3.0
 [0.2.0]: https://www.npmjs.com/package/@aryan-vashishth/advanced-logger/v/0.2.0
 [0.1.0]: https://www.npmjs.com/package/@aryan-vashishth/advanced-logger/v/0.1.0

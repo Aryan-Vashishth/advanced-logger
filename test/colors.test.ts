@@ -17,12 +17,13 @@ import {
   resetConfig,
   warn,
 } from '../src';
-import { BG_BLACK, BOLD, FG_BRIGHT_WHITE, FG_BRIGHT_BLACK, RESET, RGB_FG } from '../src/ansi';
+import { BG_BLACK, BOLD, FG_BRIGHT_BLACK, RESET, rgbFg } from '../src/ansi';
 import { resolveStyle } from '../src/theme';
 
 const ESC = '\u001b';
-const INTERACTION_FG = FG_BRIGHT_WHITE + BOLD;
-const DEEP_RED_BOLD = RGB_FG.DEEP_RED + BOLD;
+// click's own color, which is also the INTERACTION family's anchor (the intent fallback).
+const INTERACTION_FG = rgbFg(70, 166, 255) + BOLD;
+const DEEP_RED_BOLD = rgbFg(248, 75, 75) + BOLD;
 
 let tmp: string;
 let out: string[];
@@ -51,15 +52,17 @@ afterEach(() => {
 
 const lines = (): string[] => out.join('').split('\n').filter(Boolean);
 
+/** Every file under the date folder: the trace files and the table attachments (attachments/csv, attachments/json). */
 function readAllTraces(): string[] {
   const day = path.join(tmp, fs.readdirSync(tmp)[0]!);
-  return fs
-    .readdirSync(day)
-    .flatMap((kind) => fs.readdirSync(path.join(day, kind)).map((f) => fs.readFileSync(path.join(day, kind, f), 'utf8')));
+  return (fs.readdirSync(day, { recursive: true }) as string[])
+    .map((rel) => path.join(day, rel))
+    .filter((f) => fs.statSync(f).isFile())
+    .map((f) => fs.readFileSync(f, 'utf8'));
 }
 
 describe('fg/bg combinations (console)', () => {
-  it('bothOn_isTheZeroPointOneOutput', () => {
+  it('bothOn_foregroundPlusBackground', () => {
     info.click('Submit');
     expect(lines()).toEqual([INTERACTION_FG + BG_BLACK + 'TS │ CLICK [>] │ Submit' + RESET]);
   });
@@ -126,7 +129,8 @@ describe('fg/bg across every action family', () => {
     ['tree', () => info.tree('Heading', { a: 1, b: 2 })],
     ['resolved', () => info.resolved('Heading', { a: 1 })],
     ['table', () => info.table([{ ID: 1, Name: 'Alice' }], 'Users')],
-    ['tableNoTitle', () => info.table([{ ID: 1 }])],
+    // No title, as plain JS or older code would call it: renders without a title row.
+    ['tableNoTitle', () => (info.table as (d: unknown) => void).call(info, [{ ID: 1 }])],
   ];
 
   it.each(calls)('%s: fg=false leaves no foreground escape and no bold', (_n, call) => {
@@ -185,7 +189,7 @@ describe('plain-text sinks stay clean', () => {
     info.table([{ ID: 1 }], 'T');
     error.log('bad');
     const traces = readAllTraces();
-    expect(traces.length).toBeGreaterThanOrEqual(3);
+    expect(traces.length).toBeGreaterThanOrEqual(5); // 3 traces + the table's CSV and JSON
     for (const t of traces) expect(t).not.toContain(ESC);
   });
 });

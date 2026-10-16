@@ -1,7 +1,8 @@
 import { resolveCaller } from './caller';
 import { config, formatTs, infoLimitHint, levelEnabled, workerLabel } from './config';
-import { type LogEvent, activeSinks } from './sinks';
-import { type LevelName, LogIntent, resolveStyle } from './theme';
+import { type LogEvent, type TableData, activeSinks } from './sinks';
+import { maskText } from './redact';
+import { type LevelName, type LogAction, LogIntent, resolveStyle } from './theme';
 
 let currentTest: string | undefined;
 let currentTitle: string | undefined;
@@ -26,8 +27,12 @@ export function dispatch(
   color: string,
   label: string,
   message: string | null | undefined,
+  /** A rendered table's rows as data (sinks may write it out, e.g. the CSV/JSON attachments). */
+  table?: TableData,
 ): void {
   const cfg = config();
+  // Before truncation and every sink, so no output (console, files, jsonl, report attachment) holds the secret.
+  if (cfg.redactText && message != null) message = maskText(message, cfg.redactKeys);
   const limit = cfg.infoLogsCharLimit;
   // Only INFO lines that the console would show, and never pre-colored blocks (tables, which have tableCellLimit).
   if (
@@ -49,10 +54,11 @@ export function dispatch(
       `INFO log exceeded the ${limit} char threshold (${total} chars). Refer to the debug logs to see the full text. ${infoLimitHint()}`,
     );
     // A plain log() line is labelled with its own level; the full-text copy is a DEBUG line, so relabel it.
-    emit('DEBUG', intent, themed('DEBUG', intent), label === level ? 'DEBUG' : label, message);
+    // BASE lines take the level's color, so the copy turns DEBUG grey; an action line keeps its own color.
+    emit('DEBUG', intent, intent === LogIntent.BASE ? themed('DEBUG', intent) : color, label === level ? 'DEBUG' : label, message);
     return;
   }
-  emit(level, intent, color, label, message);
+  emit(level, intent, color, label, message, table);
 }
 
 function emit(
@@ -61,6 +67,7 @@ function emit(
   color: string,
   label: string,
   message: string | null | undefined,
+  table?: TableData,
 ): void {
   const cfg = config();
   const sinks = activeSinks().filter((s) => s.accepts(level, cfg));
@@ -81,6 +88,7 @@ function emit(
     worker: workerLabel(),
     test: currentTest,
     testTitle: currentTitle,
+    table,
   };
   for (const s of sinks) {
     try {
@@ -92,6 +100,6 @@ function emit(
   }
 }
 
-export function themed(level: LevelName, intent: LogIntent): string {
-  return config().ansi ? resolveStyle(level, intent) : '';
+export function themed(level: LevelName, intent: LogIntent, action?: LogAction): string {
+  return config().ansi ? resolveStyle(level, intent, action) : '';
 }

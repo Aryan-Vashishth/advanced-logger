@@ -91,7 +91,7 @@ describe('infoLogsCharLimit', () => {
     warn.log(LONG);
     error.log(LONG);
     debug.log(LONG);
-    info.table([{ Col: LONG }]);
+    info.table([{ Col: LONG }], 'T');
     const text = out.join('');
     expect(text.split(LONG).length - 1).toBeGreaterThanOrEqual(3);
     expect(text).not.toContain('chars)');

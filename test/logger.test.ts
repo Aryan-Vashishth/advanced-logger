@@ -70,7 +70,7 @@ describe('ansi + theme', () => {
 
   it('resolveStyle_errorBase_usesErrorFgOnBlackBg', () => {
     const s = resolveStyle('ERROR', 'BASE');
-    expect(s).toContain('38;2;210;48;48');
+    expect(s).toContain('38;2;248;75;75');
     expect(s.endsWith('\u001b[40m')).toBe(true);
   });
 
@@ -177,12 +177,12 @@ describe('structured output', () => {
 
   it('table_cellLimit_truncatesWithEllipsis', () => {
     configure({ tableCellLimitEnabled: true, tableCellLimit: 8 });
-    info.table({ K: 'abcdefghijklmnop' });
+    info.table({ K: 'abcdefghijklmnop' }, 'T');
     expect(out.join('')).toContain('abcde...');
   });
 
   it('table_emptyRows_logsNoRowsMessage', () => {
-    info.table([]);
+    info.table([], 'T');
     expect(lines()[0]).toBe('TS │ TABLE │ No rows to display.');
   });
 

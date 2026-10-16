@@ -186,8 +186,67 @@ describe('configure() validation', () => {
     expect(config().maxRuns).toBe(3);
   });
 
-  it('callbackForm_isNotChecked', () => {
-    configure((c) => void ((c as unknown as Record<string, unknown>).custom = 1));
+  it('callback_unknownKey_warnsAndIsRemoved', () => {
+    configure((c) => void ((c as unknown as Record<string, unknown>).levl = 'debug'));
+    expect(err.join('')).toContain("configure() callback has an unknown option 'levl'");
+    expect('levl' in config()).toBe(false);
+  });
+
+  it('callback_wrongType_warnsAndIsRevertedToThePreviousValue', () => {
+    configure({ level: 'warn' });
+    configure((c) => {
+      (c as unknown as Record<string, unknown>).level = 'verbose';
+      c.console = false; // a valid change in the same callback still applies
+    });
+    expect(err.join('')).toContain("configure() callback: option 'level' must be one of");
+    expect(config().level).toBe('warn');
+    expect(config().console).toBe(false);
+  });
+
+  it('callback_badFilesEntry_isRevertedOrRemoved', () => {
+    configure((c) => {
+      (c.files as unknown as Record<string, unknown>).debugTrace = 'yes';
+      (c.files as unknown as Record<string, unknown>).bogus = true;
+      c.files.jsonl = true;
+    });
+    expect(config().files.debugTrace).toBe(true);
+    expect('bogus' in config().files).toBe(false);
+    expect(config().files.jsonl).toBe(true);
+  });
+
+  it('callback_arrayForASetOption_becomesASet', () => {
+    configure((c) => void ((c as unknown as Record<string, unknown>).suppressContains = ['vendor']));
+    expect(config().suppressContains).toBeInstanceOf(Set);
+    expect([...config().suppressContains]).toEqual(['vendor']);
     expect(err.join('')).toBe('');
+  });
+
+  it('callback_validChanges_noWarning', () => {
+    configure((c) => {
+      c.level = 'debug';
+      c.redactKeys.push('pin');
+      c.recentRunMinutes = 5;
+    });
+    expect(err.join('')).toBe('');
+    expect(config().redactKeys).toContain('pin');
+  });
+});
+
+describe('configure() validation of the 0.4.0 options', () => {
+  it('wrongTypes_forNewOptions_warnAndAreSkipped', () => {
+    configure({ recentRunMinutes: -5, redactText: 'yes', files: { tables: 1 } } as never);
+    const text = err.join('');
+    expect(text).toContain("option 'recentRunMinutes' must be a number >= 0");
+    expect(text).toContain("option 'redactText' must be a boolean");
+    expect(text).toContain("'files.tables'");
+    expect(config().recentRunMinutes).toBe(60);
+    expect(config().redactText).toBe(true);
+    expect(config().files.tables).toBe(true);
+  });
+
+  it('checkPatch_reportsTheKeyOfEachProblem', async () => {
+    const { checkPatch } = await import('../src/configFile');
+    const { problems } = checkPatch({ levl: 1, level: 'x', files: { bogus: true } }, 'test');
+    expect(problems.map((p) => p.key)).toEqual(['levl', 'level', 'files.bogus']);
   });
 });

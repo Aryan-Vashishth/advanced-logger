@@ -10,7 +10,7 @@ This document describes the code as it is. File and symbol names are exact. Beha
 
 ## 1. What it does, in one paragraph
 
-Test code calls `info.click('Submit')`, `warn.log('x')`, `error.table(rows)` and so on. Every call goes through one function (`dispatch` in `src/core.ts`), which builds a `LogEvent` and hands it to a list of sinks. Sinks write to the console (colored), to three plain-text trace files, optionally to a JSONL file, to an in-memory buffer (used to attach the log to a Playwright report on failure), and to any custom sink. Configuration comes from four layers (defaults, config file, env vars, `configure()` calls). Each Playwright worker is a separate process with its own logger state, writing its own files.
+Test code calls `info.click('Submit')`, `warn.log('x')`, `error.table(rows, 'Failures')` and so on. Every call goes through one function (`dispatch` in `src/core.ts`), which builds a `LogEvent` and hands it to a list of sinks. Sinks write to the console (colored, one color per action), to three plain-text trace files, optionally to a JSONL file, to a CSV and a JSON file per logged table, to an in-memory buffer (used to attach the log to a Playwright report on failure), and to any custom sink. Configuration comes from four layers (defaults, config file, env vars, `configure()` calls). Each Playwright worker is a separate process with its own logger state, writing its own files.
 
 ## 2. Repository layout
 
@@ -23,7 +23,8 @@ src/
   core.ts         dispatch(): the single funnel; INFO truncation; themed(); test context
   config.ts       LogConfig, defaults, layered build, configure(), env parsing, run id
   configFile.ts   logger.config.* discovery, loading, validation
-  theme.ts        LogIntent, the one built-in theme, resolveStyle()
+  theme.ts        LogIntent, the one built-in theme, ACTION_FG (per-action colors), resolveStyle()
+  redact.ts       maskText(): free-text secret masking (redactText)
   ansi.ts         escape-code factory, color catalog, stripAnsi
   caller.ts       stack parsing: "caller" suffix and "[CHAIN]"
   sinks.ts        Sink interface, built-in sinks, file writing, retention, registry
@@ -35,6 +36,9 @@ test/
   retention.test.ts     maxRuns, maxLogFiles, recent/missing-run-id guards
   separable.test.ts     consoleWorker, consoleTest, missing initRun() warning, configure() validation
   multi-worker.test.ts  spawns real Playwright with 2 workers (fixtures/multi-worker/)
+  table-files.test.ts   CSV/JSON table attachments: names, contents, redaction, retention
+  palette.test.ts, redaction.test.ts   per-action colors; nested and free-text redaction
+  sweep/                npm run sweep: manual check of every console visual and every file, with file checks
   *.spec.ts, playwright*.config.ts, global-setup.ts   Playwright e2e/demo specs
 dist/             tsc output (CommonJS, ES2022), gitignored, what npm publishes
 ```
@@ -68,11 +72,12 @@ Two potential cycles are deliberately broken with `import type`: `config.ts` imp
 
 ```
 info.click('Submit')                         actions.ts  LogActions.click
-  └► this.msg(LogIntent.INTERACTION, 'CLICK [>]', m)
-       └► dispatch('INFO', intent, themed(level,intent), label, str(m))     core.ts
+  └► this.msg(LogIntent.INTERACTION, 'CLICK [>]', m, 'click')
+       └► dispatch('INFO', intent, themed(level,intent,'click'), label, str(m))     core.ts
             1. cfg = config()                         (lazy build on first call, see §6)
-            2. INFO truncation branch (see §9)        may emit 3 events and return
-            3. emit(...):
+            2. redactText: message = maskText(...)    (see §3, redaction)
+            3. INFO truncation branch (see §11)       may emit 3 events and return
+            4. emit(...):
                  a. sinks = activeSinks().filter(s => s.accepts(level, cfg))
                  b. if none accept: return            (no stack is ever captured)
                  c. resolveCaller(cfg)                caller.ts: parse new Error().stack
@@ -83,7 +88,7 @@ info.click('Submit')                         actions.ts  LogActions.click
 
 Key properties:
 
-- **Single funnel.** Everything (actions, tables, trees, Playwright fixture banner lines) ends in `dispatch`. Cross-cutting features (truncation) live there.
+- **Single funnel.** Everything (actions, tables, trees, Playwright fixture banner lines) ends in `dispatch`. Cross-cutting features (free-text masking, truncation) live there.
 - **Cheap rejection first.** `Sink.accepts(level, cfg)` runs before any stack capture, which is the expensive part. If the root level hides the line and file sinks are off, no stack is captured.
 - **A logger never fails a test.** A throwing sink is caught and reported once per call on stderr. The one deliberate exception is a broken config file (see §7), which throws.
 - **Color is baked at call time.** `themed()` computes the escape prefix when the action is called and stores it in `LogEvent.color`. Sinks do not recompute it.
@@ -106,9 +111,11 @@ Key properties:
 Composite methods:
 
 - `log(...)` is overloaded: string; object/array/map (table or indexed list); `(heading, fields)` or `(heading, k, v, ...)` (tree); `(heading, value)`.
-- `table(rows, title?)` renders an ASCII table through `renderTable`, then calls `dispatch(level, null, color, 'TABLE', ...)` with **intent `null`** (a pre-colored block). `table("text")` is just a TABLE line.
+- `table(rows, title)` renders an ASCII table through `renderTable`, then calls `dispatch(level, null, color, 'TABLE', ...)` with **intent `null`** (a pre-colored block). `table("text")` is just a TABLE line. The title is required by the type. At runtime a missing or blank title is allowed (plain JS, older code): `warnOnce` asks for one, the table renders without a title row, and its files get the heading `untitled`. `tableInternal(data, title, heading)` separates the console title row (`title`, may be undefined) from the file heading: `log(object)` uses no title row and the heading `log`, a logged list's items `list item N`. A title longer than the table widens the last column instead of being cut.
 - `row`, `tree`, `resolved` emit several `msg()` lines (one `dispatch` each).
-- Redaction: values whose key contains any of `redactKeys` (case-insensitive substring) print as `***` in tree/table/row.
+- Redaction, structured: `redacted(key, v)` prints `***` when the key contains any of `redactKeys` (case-insensitive substring), else returns `redactDeep(v)`: a copy with sensitive keys masked at any depth in plain objects, Maps and arrays (a `toJSON()` result is redacted instead of the object; cycles become `[Circular]`; the caller's object is never touched). Used by tree, table and row.
+- Redaction, free text (`redact.ts`, when `redactText`): `dispatch` runs `maskText(message, redactKeys)` before truncation and before any sink, so every output is masked. It masks the value in `key=value`, `key: value`, `"key":"value"` and `'key': 'value'` when the key contains a sensitive word, plus `Bearer|Basic <credentials>`. The pair regex is built from `redactKeys` and cached per key list. Pattern-based, so it can miss or over-mask (README lists the limits).
+- Colors: `msg(intent, label, m, action?)` passes the action name (`'click'`, ...) so `themed()` can pick the action's own color (§10).
 - Malformed arguments never throw (`safeFields` keeps a dangling key under `(unpaired)`); `fields()` itself throws on an odd count by design.
 
 ## 5. The event model
@@ -126,6 +133,7 @@ interface LogEvent {
   worker: string;                  // 'w<TEST_WORKER_INDEX>' or 'main'
   test?: string;                   // full title path, set by the Playwright fixture (jsonl)
   testTitle?: string;              // the test's own title (consoleTest prefix)
+  table?: TableData;               // a rendered table as data: {title, headers, rows, file}
 }
 interface Sink { accepts(level, cfg): boolean; write(ev, cfg): void }
 ```
@@ -145,6 +153,7 @@ Rendered line shape: `<ts> │ <label> │ <message line>` where `│` is `cfg.s
 | `callerColor` | bool, `false` | Color the caller suffix separately (console, debug level). Independent of fg/bg |
 | `infoLogsCharLimit` | number\|null, `null` | INFO truncation limit (§11). null/0 = off |
 | `maxRuns` | number\|null, `null` | Retention per trace kind, in whole runs (§12). null/0 = off |
+| `recentRunMinutes` | number, `60` | Retention never deletes a run touched this recently (§12). 0 = off |
 | `maxLogFiles` | number\|null, `null` | Retention per trace kind, in files (§12). null/0 = off |
 | `consoleWorker` | bool, `false` | Console lines prefixed `w<N> │ ` (§9) |
 | `consoleTest` | bool, `false` | Console lines prefixed with the test title, max 40 chars (§9) |
@@ -154,10 +163,11 @@ Rendered line shape: `<ts> │ <label> │ <message line>` where `│` is `cfg.s
 | `suppressContains`, `suppressMethodPrefixes`, `includeOnlyPrefixes` | Sets | Caller/chain frame filters (§8) |
 | `projectRoots` | string[], `[cwd]` | Frames under these form the `[CHAIN]` |
 | `console` | bool, true | Console sink on/off |
-| `files` | `{debugTrace, partialTrace, fullTrace, jsonl}` | Per-file toggles (jsonl default false) |
+| `files` | `{debugTrace, partialTrace, fullTrace, jsonl, tables}` | Per-file toggles (jsonl default false; tables, the CSV/JSON table attachments, default true) |
 | `logDir` | string, `./logs` | Output root |
 | `githubAnnotations` | bool, `GITHUB_ACTIONS==='true'` | Emit `::error::`/`::warning::` lines |
-| `redactKeys` | string[] | Keys masked in structured output |
+| `redactKeys` | string[] | Keys masked in structured output (any depth) and, with `redactText`, in free text |
+| `redactText` | bool, `true` | Mask `key=value`-style secrets and `Bearer`/`Basic` credentials in message text (§3) |
 | `attach` | `'on-failure'\|'always'\|'never'` | Playwright attachment policy |
 
 `LogConfigPatch` = `Partial<LogConfig>` with the Set-typed fields accepting any iterable and `files` partial. It is the type `configure()` and config files accept.
@@ -169,7 +179,7 @@ Rendered line shape: `<ts> │ <label> │ <message line>` where `│` is `cfg.s
 3. **Environment variables**: `applyEnv()`.
 4. **`configure()` calls** in code mutate the live object afterwards, so they always win.
 
-Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, `VOID_RUN_DATE`, plus `NO_COLOR` / `FORCE_COLOR`. Booleans: `1/true/yes/on` true, anything else non-empty false. An invalid level or non-numeric limit is ignored (so it cannot override a lower layer). `NO_COLOR`/`FORCE_COLOR` count as env-level (they beat `ansi` in a file); terminal auto-detection counts as default-level (the file beats it). See `explicitAnsi()` vs `heuristicAnsi()`.
+Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_LOG_FG`, `VOID_LOG_BG`, `VOID_LOG_JSONL`, `VOID_LOG_TABLES`, `VOID_LOG_INFO_LOGS_CHAR_LIMIT`, `VOID_LOG_MAX_RUNS`, `VOID_LOG_MAX_FILES`, `VOID_LOG_RECENT_RUN_MINUTES`, `VOID_LOG_REDACT_TEXT`, `VOID_LOG_CONFIG`, `VOID_RUN_ID`, `VOID_RUN_DATE`, plus `NO_COLOR` / `FORCE_COLOR`. Booleans: `1/true/yes/on` true, anything else non-empty false. An invalid level or non-numeric limit is ignored (so it cannot override a lower layer). `NO_COLOR`/`FORCE_COLOR` count as env-level (they beat `ansi` in a file); terminal auto-detection counts as default-level (the file beats it). See `explicitAnsi()` vs `heuristicAnsi()`.
 
 ### 6.3 Lazy, per-process state
 
@@ -178,7 +188,8 @@ Environment variables: `VOID_LOG_LEVEL`, `VOID_LOG_DIR`, `VOID_LOG_ANSI`, `VOID_
 - `config()` returns `CURRENT ?? build()`. The first call in a process builds the config (including reading the config file). Every process, including each Playwright worker, does this independently.
 - `build()` sets `CURRENT = cfg` early as a **re-entrancy guard**: a config file that imports this package and touches `config()` while loading sees the defaults instead of recursing. On failure it sets `CURRENT = undefined` and rethrows, so every later call throws again (no silent fallback to defaults).
 - `configure(patch | fn)`, the `enable*/disable*` mutators, and every internal reader go through `config()`, so they trigger the load first. Therefore a `configure()` call made before any log call still sits above the file.
-- `configure(patch)` runs the patch through `checkPatch` (the config file's validator, §7) with the source label `configure()`. Unlike a file, it never throws: each problem is written to stderr once per process (`WARNED`, cleared by `resetConfig()`) and that key is left out; the rest applies. A non-object patch warns and is ignored. The callback form is not checked.
+- `configure(patch)` runs the patch through `checkPatch` (the config file's validator, §7) with the source label `configure()`. Unlike a file, it never throws: each problem is written to stderr once per process (`WARNED`, cleared by `resetConfig()`) and that key is left out; the rest applies. A non-object patch warns and is ignored.
+- `configure(fn)` snapshots the config (`cloneConfig`), runs the callback on the live object, then `checkLive` turns arrays assigned to the three Set-typed options into Sets and runs `checkPatch` over the whole live config with the label `configure() callback`. Each problem warns once and is undone: a wrong-typed option goes back to its snapshot value, an unknown option or `files` entry is deleted. `checkPatch` reports each problem with its key (`PatchProblem`) for this.
 - `resetConfig()` clears `CURRENT`, forgets the cached config file (`forgetConfigFile()` deletes it from `require.cache`), and rebuilds. Used by tests.
 - A mutable `LIMIT_SOURCE` records which layer set `infoLogsCharLimit` (`default|file|env|code`) for the truncation hint.
 
@@ -221,9 +232,12 @@ If the chain comes out empty, `projectRoots` does not cover the test code; set `
 | debug-trace | file toggle, **all levels** | Plain text + caller suffix |
 | full-trace | file toggle, **all levels** | Plain text + `[CHAIN] <chain>` suffix |
 | jsonl | `files.jsonl` | One JSON record per event (opt-in) |
+| table files | `files.tables`, **all levels**; acts only on events with `ev.table.file` | `attachments/{csv,json}/<runId>-<worker>/<NNN>-<heading>.{csv,json}` per table |
 | capture | an active capture exists and level ≥ root | In-memory lines for the Playwright attachment |
 
 Files: `<logDir>/<runDate>/<kind>/<kind>-<runId>-<worker>.log` (`traceFilePath`). Writes are **synchronous** (`fs.writeSync` on cached fds in `FD_CACHE`), one file per worker, so parallel workers never interleave and a crash loses nothing. Every file line is prefixed `w<N> │ ` and passes through `stripAnsi`, so **plain-text sinks never contain escape codes** regardless of color flags. `closeAllFiles()` closes fds (and clears prune bookkeeping).
+
+Table attachments (`tableFilesSink`): `renderTable` (actions.ts) asks `nextTableFile(cfg, heading)` for a name, `<runId>-<worker>/<NNN>-<slug>`. The folder `<runId>-<worker>` is the part all of this worker's trace files share (`<kind>-<runId>-<worker>.log`), so each parent log has its own folder under `attachments/csv/` and `attachments/json/`. `NNN` comes from a per-process counter that is never reset; a number whose CSV or JSON already exists (another process with the same run id and worker label) is skipped, never overwritten. `headingSlug` lowercases the heading, turns every run of non-letters/digits (Unicode `p{L}p{N}`) into `-`, cuts at 40 chars, and falls back to `table`. The table is dispatched with a `TableData` payload: headers in render order and rows as plain objects, already redacted by key at any depth (`redactDeep`) and never truncated; `file` is the relative name. The sink writes both files with `writeFileSync` (`tableFilePath` joins the folder); with `redactText` it masks each string value and the title (`maskStrings`), never the serialized text, which would break JSON. CSV (`tableToCsv`): BOM, CRLF, RFC 4180 quoting, objects as JSON, a leading `'` on text cells starting with `= + - @` (except plain negative numbers). JSON (`tableToJson`): `{title, time, level, worker, runId, test, columns, rows}`, with a replacer for Map, Set, bigint and Error. After the table, `renderTable` dispatches a DEBUG `TABLE FILES │ attachments/csv/<file>.csv | attachments/json/<file>.json` line, so debug-trace and full-trace point to the files. Custom sinks see `ev.table` too.
 
 Console rendering (`consoleSink`):
 - Opt-in prefix (`consolePrefix`), placed before the timestamp and inside the color block: `w<N> │ ` when `consoleWorker`, then `<testTitle> │ ` when `consoleTest` and a test is running (line breaks flattened, cut to `TEST_TAG_MAX` = 40 chars with `...`). The worker part uses a literal ` │ `, like the file prefix, not `segmentDivider`. The GitHub annotation text carries the same prefix. File sinks do not use it: they are already per worker, and tests are bracketed by `TEST START`/`TEST END`.
@@ -234,13 +248,14 @@ Console rendering (`consoleSink`):
 
 ## 10. Color model (`theme.ts`, `ansi.ts`)
 
-One built-in theme (HIGH_CONTRAST). `resolveStyle(level, intent)` = foreground + background:
+One built-in theme (HIGH_CONTRAST). `resolveStyle(level, intent, action?)` = foreground + background:
 
-- Foreground: for `BASE` intent, `LEVEL_FG[level]` (white, amber, red, grey, all bold); otherwise `INTENT_FG[intent]`.
+- Foreground: for `BASE` intent, `LEVEL_FG[level]` (white, amber, red, grey, all bold). Otherwise `ACTION_FG[action] + BOLD` when the line has an action, else `INTENT_FG[intent]` (the family's anchor color, for custom `LogActions` subclasses that call `msg` without an action). Neither depends on the level.
+- `ACTION_FG` gives each of the 31 actions its own 24-bit color inside its intent's hue family: interaction blues, navigation teals, observe pinks, verify gold, data violets, success greens, alert reds and oranges. ERROR and `failed` share `ERROR_RED` (248,75,75). The values were chosen in OKLCH and are enforced by `palette.test.ts`: contrast at least 4.5 on `#1e1e1e`, CIEDE2000 at least 10 within a family and 12 across families (including the INFO and WARN level colors). Change a color only with that test passing.
 - Background: constant `BG_BLACK` for every level (there is no per-level background).
 - `config().fg` false drops the foreground part; `config().bg` false drops the background; both false returns `''`.
-- `themed(level, intent)` in `core.ts` returns `''` when `ansi` is off, else `resolveStyle`.
-- Tables build their own bold/reset around the title; those are emitted only when a style exists and `fg` is on (bold belongs to the foreground).
+- `themed(level, intent, action?)` in `core.ts` returns `''` when `ansi` is off, else `resolveStyle`. The DEBUG copy made by INFO truncation reuses the original line's color unless it is a BASE line (which turns DEBUG grey).
+- Tables: the title row and the column-name row are wrapped as `TABLE_HEADER_FG + BOLD + line + color`, a darker shade of the table violet (4.66:1 on `#1e1e1e`, CIEDE2000 25.8 from the body), then the table's own style is restored so the background continues. Only when a style exists and `fg` is on (the header color is a foreground). Borders and data rows use the table color.
 
 `ansi.ts` is a catalog and factory (`sgr`, `fg16`, `rgbFg`, ... named `FG_*`, `BG_*`, `RGB_FG`, ...), plus `stripAnsi` and `fgFromStyle`.
 
@@ -262,10 +277,10 @@ Then three events are emitted via `emit()`:
 
 - `maxLogFiles`: of the files outside the current run, the newest `maxLogFiles - currentRunFiles` are kept.
 - `maxRuns`: of the runs other than the current one, the newest `maxRuns - 1` are kept; older runs are marked whole.
-- A file goes if either limit marks it. Then two guards apply: files whose name contains the current run id are never marked (parallel workers share it), and a run whose newest file is younger than `RECENT_RUN_MS` (1 hour) is never deleted, because another runner or CI shard may still be writing it. Neither limit is a hard cap.
+- A file goes if either limit marks it. Then two guards apply: files whose name contains the current run id are never marked (parallel workers share it), and a run whose newest file is younger than `recentRunMinutes` (default 60; 0 = no such guard) is never deleted, because another runner or CI shard may still be writing it. Neither limit is a hard cap.
 - Skipped entirely when `runIdMissing()` (§13): without a shared run id, each worker's "current run" is its own pid-based id, and its siblings' live files would look like an older run.
 
-Emptied kind and date folders are removed. Best effort; all errors swallowed.
+Kinds are described by `pruneSpec(kind)`: folder, the names this logger owns, the run-id regex, and whether files sit in per-worker folders. Besides the four trace kinds there are `table-csv` and `table-json` (folders `attachments/csv`, `attachments/json`), whose files sit one level down in `<runId>-<worker>` folders (`perWorkerFolders`): `listKind` reads the run id from the folder name, so a table heading can never confuse it, and folders or files not named like the logger's own are left alone. Attachments are pruned by `maxRuns` only (`byFileCount: false`): a table count says nothing about runs. Folders left empty are removed upward (worker folder, kind, `attachments`, date), never `logDir` itself. Best effort; all errors swallowed.
 
 ## 13. Run identity and workers (`config.ts`)
 
@@ -282,7 +297,7 @@ Emptied kind and date folders are removed. Best effort; all errors swallowed.
 
 - **Custom sink**: `addSink({ accepts(level,cfg){...}, write(ev,cfg){...} })`. Receives the same `LogEvent`; `ev.color` is ANSI, strip it for plain output.
 - **In-memory capture**: `captureLogs()` returns `{ text(), stop() }`.
-- **New action**: add a method in `LogActions` calling `this.msg(intent, label, m)`. For a new intent, add it to `LogIntent` and `INTENT_FG` in `theme.ts`.
+- **New action**: add a method in `LogActions` calling `this.msg(intent, label, m, 'name')`, give `name` a color in `ACTION_FG` (in its intent's hue family), and add it to `FAMILIES` in `palette.test.ts`; that test then checks the color's contrast and distance from the others. For a new intent, add it to `LogIntent` and `INTENT_FG` in `theme.ts`.
 - **New config option**: add to `LogConfig` and `builtinDefaults`; add to the `KEYS` table in `configFile.ts` (validation); optionally an env var in `applyEnv`; document in README; add tests. `LogConfigPatch` updates automatically.
 
 ## 16. Invariants and gotchas (read before changing code)
@@ -295,16 +310,17 @@ Emptied kind and date folders are removed. Best effort; all errors swallowed.
 6. `configure()` must go through `config()` so the config file is loaded first; never touch `CURRENT` directly elsewhere.
 7. A bad config file must keep throwing (no silent fallback). `build()` resets `CURRENT` on failure for this reason.
 8. Files are written synchronously on purpose; do not buffer.
-9. The default theme/`fg`/`bg` defaults must keep 0.1.0 output byte-identical.
+9. Default console colors changed once, deliberately, in 0.4.0 (per-action colors). Any further change to default colors is a minor version, needs a CHANGELOG entry, and must keep `palette.test.ts` passing. Files never contain colors.
 10. Config is built lazily at first use (not at import). An env var changed between import and the first log call is honored; this is the one intentional difference from 0.1.0.
 11. In regexes written inside template literals, escape backslashes (`\\.`); a past bug came from exactly this.
-12. Retention must never run in a worker without a shared run id (`runIdMissing()`), and must never delete the current run or a run touched within `RECENT_RUN_MS`.
-13. `configure()` never throws on bad input; it warns and skips. Only a config file fails loudly.
-14. New output options that change line format default to off, so existing console and file output stays byte-identical.
+12. Retention must never run in a worker without a shared run id (`runIdMissing()`), and must never delete the current run or a run touched within `recentRunMinutes` (unless it is 0).
+13. `configure()` never throws on bad input, in either form; it warns and skips (or reverts). Only a config file fails loudly.
+14. New output options that change line format default to off, so existing console and file output stays byte-identical. The one exception is masking secrets (`redactText`, on since 0.4.0): leaking a secret by default is worse than changing a line.
+15. Free-text masking runs in `dispatch` before truncation and before any sink. Do not move it into a sink, or some outputs would hold the secret.
 
 ## 17. Differences from the Java logger
 
-Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip archives. Changed: caller frames are excluded by path rather than method-name prefix. Added: secret redaction, JSONL sink, custom sinks, in-memory capture, Playwright fixture with attachment, per-worker files, config file, `fg`/`bg`, INFO truncation, file and run retention, console worker/test prefixes.
+Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip archives. Changed: caller frames are excluded by path rather than method-name prefix. Added: secret redaction, JSONL sink, custom sinks, in-memory capture, Playwright fixture with attachment, per-worker files, config file, `fg`/`bg`, INFO truncation, file and run retention, console worker/test prefixes, per-action colors, nested and free-text redaction.
 
 ## 18. Testing map
 
@@ -315,7 +331,11 @@ Dropped: custom themes, `setTheme`, width/arrow settings, file rotation and gzip
 | Discovery order, forms, precedence, `VOID_LOG_CONFIG`, loud failures | `config-file.test.ts` |
 | Truncation text, WARN/DEBUG lines, hint by source | `truncate.test.ts` |
 | Retention by files and runs, protection of current and recent runs, missing run id, foreign files | `retention.test.ts` |
-| consoleWorker/consoleTest prefixes, missing-run-id warning, `configure()` validation | `separable.test.ts` |
+| consoleWorker/consoleTest prefixes, missing-run-id warning, `configure()` patch and callback validation | `separable.test.ts` |
+| Per-action colors, palette contrast and distance limits | `palette.test.ts` (+ `helpers/color-metrics.ts`) |
+| Nested redaction, free-text masking | `redaction.test.ts` |
+| Table CSV/JSON attachments: names, link line, formatting, redaction, retention | `table-files.test.ts` |
+| Everything at once, by eye, plus automatic file checks | `npm run sweep` (`test/sweep/`; writes to `./logs` like any run, and checks only its own run id's files) |
 | Real Playwright, 2 workers, `.ts` config, `globalSetup` isolation, console prefixes, shared vs split run id | `multi-worker.test.ts` + `fixtures/multi-worker/` |
 | Visual/e2e demos | `*.spec.ts` via `test/playwright.config.ts` |
 
