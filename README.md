@@ -1,6 +1,7 @@
 # advanced-logger
 
 Self-contained TypeScript port of the VOID `core.logging` package, for Playwright projects.
+Source code and issues: [github.com/Aryan-Vashishth/advanced-logger](https://github.com/Aryan-Vashishth/advanced-logger).
 No runtime dependencies other than `@playwright/test` (optional, only needed for the `@void.01/advanced-logger/playwright` entry).
 
 ## Installation
