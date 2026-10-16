@@ -1,6 +1,12 @@
 # Changelog
 
-All notable changes to `@aryan-vashishth/advanced-logger`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a minor release may add options but keeps existing defaults and output unchanged unless noted.
+All notable changes to `@void.01/advanced-logger`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a minor release may add options but keeps existing defaults and output unchanged unless noted.
+
+## [Unreleased]
+
+### Changed
+
+- **The package is renamed to `@void.01/advanced-logger`.** Versions up to 0.4.0 were published as `@aryan-vashishth/advanced-logger`. To switch, uninstall the old package, install the new one, and change imports to `@void.01/advanced-logger` and `@void.01/advanced-logger/playwright`. The API and output are unchanged.
 
 ## [0.4.0] - 2026-10-16
 

@@ -1,6 +1,6 @@
 # advanced-logger: architecture (A to Z)
 
-Package: `@aryan-vashishth/advanced-logger` (version in `package.json`).
+Package: `@void.01/advanced-logger` (version in `package.json`).
 A TypeScript logger for Playwright test projects. It is a port of the Java `core.logging` package ("VOID") with additions.
 Runtime dependencies: none. `@playwright/test` is an optional peer dependency, needed only by the `/playwright` entry.
 
@@ -49,8 +49,8 @@ Published entry points (`package.json` `exports`):
 
 | Import path | File | Purpose |
 |---|---|---|
-| `@aryan-vashishth/advanced-logger` | `dist/index.js` | `info/warn/error/debug`, `configure`, `defineConfig`, helpers |
-| `@aryan-vashishth/advanced-logger/playwright` | `dist/playwright.js` | drop-in `test`/`expect` with logging fixture |
+| `@void.01/advanced-logger` | `dist/index.js` | `info/warn/error/debug`, `configure`, `defineConfig`, helpers |
+| `@void.01/advanced-logger/playwright` | `dist/playwright.js` | drop-in `test`/`expect` with logging fixture |
 
 ## 3. Module dependency graph
 

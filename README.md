@@ -1,20 +1,20 @@
 # advanced-logger
 
 Self-contained TypeScript port of the VOID `core.logging` package, for Playwright projects.
-No runtime dependencies other than `@playwright/test` (optional, only needed for the `@aryan-vashishth/advanced-logger/playwright` entry).
+No runtime dependencies other than `@playwright/test` (optional, only needed for the `@void.01/advanced-logger/playwright` entry).
 
 ## Installation
 
-Published on npm as [`@aryan-vashishth/advanced-logger`](https://www.npmjs.com/package/@aryan-vashishth/advanced-logger). No registry login or token is needed, because the package is public.
+Published on npm as [`@void.01/advanced-logger`](https://www.npmjs.com/package/@void.01/advanced-logger). No registry login or token is needed, because the package is public.
 
 ```bash
-npm install @aryan-vashishth/advanced-logger
+npm install @void.01/advanced-logger
 ```
 
 Pin an exact version if you want reproducible installs:
 
 ```bash
-npm install @aryan-vashishth/advanced-logger@0.4.0
+npm install @void.01/advanced-logger@0.4.0
 ```
 
 Requirements:
@@ -22,14 +22,14 @@ Requirements:
 - TypeScript types are bundled (`dist/*.d.ts`). The compiled output targets ES2022, and it is tested on Node 24.
 - For the Playwright entry, `@playwright/test` >= 1.40.0 must be installed in your project (it is an optional peer dependency).
 
-Check the installed version with `npm ls @aryan-vashishth/advanced-logger`, and update with `npm update @aryan-vashishth/advanced-logger`.
+Check the installed version with `npm ls @void.01/advanced-logger`, and update with `npm update @void.01/advanced-logger`.
 
 ### Entry points
 
 | Import | Use |
 |---|---|
-| `@aryan-vashishth/advanced-logger` | `info`, `warn`, `error`, `debug`, `fields`, `configure`, ... for page objects and helpers |
-| `@aryan-vashishth/advanced-logger/playwright` | Drop-in `test` / `expect` that tag each test, print a banner and attach the log on failure |
+| `@void.01/advanced-logger` | `info`, `warn`, `error`, `debug`, `fields`, `configure`, ... for page objects and helpers |
+| `@void.01/advanced-logger/playwright` | Drop-in `test` / `expect` that tag each test, print a banner and attach the log on failure |
 
 ### Quick start in a Playwright project
 
@@ -37,26 +37,26 @@ Check the installed version with `npm ls @aryan-vashishth/advanced-logger`, and 
 2. Create `global-setup.ts` so all workers share one run id:
 
    ```ts
-   import { initRun } from '@aryan-vashishth/advanced-logger';
+   import { initRun } from '@void.01/advanced-logger';
    export default async () => { initRun(); };
    ```
 
 3. Reference it in `playwright.config.ts`: `globalSetup: './global-setup.ts'`.
    If you skip this, each worker prints a one-time `VOID_RUN_ID is not set` warning to stderr. Its files then carry their own run id, and log retention is turned off in that worker, so no worker can delete another's live files.
-4. In specs, import `test` and `expect` from `@aryan-vashishth/advanced-logger/playwright` instead of `@playwright/test`.
+4. In specs, import `test` and `expect` from `@void.01/advanced-logger/playwright` instead of `@playwright/test`.
 5. Run your tests. Logs are written under `./logs/<date>/` (change with `VOID_LOG_DIR`).
 
 If the caller chain (`[CHAIN]` in `full-trace`) comes out empty, set the project root explicitly. It defaults to the working directory:
 
 ```ts
-import { configure } from '@aryan-vashishth/advanced-logger';
+import { configure } from '@void.01/advanced-logger';
 configure({ projectRoots: [__dirname] });
 ```
 
 ### Uninstall or migrate from a git install
 
 ```bash
-npm uninstall @aryan-vashishth/advanced-logger
+npm uninstall @void.01/advanced-logger
 ```
 
 If you previously installed from the GitHub URL, remove that dependency entry first so the lockfile stops recording `git+ssh://` addresses, then install from npm as shown above.
@@ -67,8 +67,8 @@ You can also copy `src/` into your own project (for example `src/logger/`) and i
 
 ```ts
 // tests: import test/expect from the Playwright entry so every test is tagged, bannered and its log attached on failure
-import { test, expect } from '@aryan-vashishth/advanced-logger/playwright';
-import { info, warn, error, fields } from '@aryan-vashishth/advanced-logger';
+import { test, expect } from '@void.01/advanced-logger/playwright';
+import { info, warn, error, fields } from '@void.01/advanced-logger';
 
 info.click('Submit');
 info.log('Request', fields('method', 'POST'));
@@ -138,7 +138,7 @@ configure({ consoleWorker: true, consoleTest: true });
 ```
 
 - `consoleWorker` adds the worker (`w<index>`, or `main` outside Playwright), the same prefix every trace-file line already has.
-- `consoleTest` adds the running test's own title, cut to 40 characters. It needs the Playwright fixture (`test` from `@aryan-vashishth/advanced-logger/playwright`); lines logged outside a test have no test segment.
+- `consoleTest` adds the running test's own title, cut to 40 characters. It needs the Playwright fixture (`test` from `@void.01/advanced-logger/playwright`); lines logged outside a test have no test segment.
 - Both apply to the console only, including GitHub annotations. The trace files are already one file per worker with `TEST START` / `TEST END` around each test, and JSONL records already carry `worker` and the full `test` path.
 
 ## Configuration
@@ -156,7 +156,7 @@ Put a `logger.config.ts` (or `.js`, `.cjs`, `.json`) in the project root, which 
 
 ```ts
 // logger.config.ts
-import { defineConfig } from '@aryan-vashishth/advanced-logger';
+import { defineConfig } from '@void.01/advanced-logger';
 
 export default defineConfig({
   level: 'debug',
