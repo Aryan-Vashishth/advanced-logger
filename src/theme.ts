@@ -102,10 +102,14 @@ export const ACTION_FG = {
 export type LogAction = keyof typeof ACTION_FG;
 
 /**
- * Table title and column-name rows: the table color (ACTION_FG.table) darker, same hue, so headers stand apart from
- * the rows below. 4.66:1 on #1e1e1e; CIEDE2000 25.8 from the table body.
+ * Table header rows, both darker than the table body (ACTION_FG.table) and different from each other, so title,
+ * column names and data read as three layers of one violet:
+ *  - title row: dark and saturated. 4.66:1 on #1e1e1e; CIEDE2000 25.8 from the body.
+ *  - column-name row: a muted mid shade, same hue as the body. 6.15:1; 15.6 from the body, 14.9 from the title.
+ * A more saturated column color would drift into the observe pinks (`wait`, `search`).
  */
-export const TABLE_HEADER_FG = rgbFg(153, 115, 223);
+export const TABLE_TITLE_FG = rgbFg(153, 115, 223);
+export const TABLE_COLUMNS_FG = rgbFg(163, 151, 192);
 
 export const CALLER_FG = FG_BRIGHT_BLACK;
 export const THEME_RESET = RESET;

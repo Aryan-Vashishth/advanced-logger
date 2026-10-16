@@ -2,7 +2,7 @@ import { BOLD, RESET } from './ansi';
 import { config, truncateCell, warnOnce } from './config';
 import { dispatch, themed } from './core';
 import { type TableData, nextTableFile } from './sinks';
-import { type LevelName, type LogAction, LogIntent, TABLE_HEADER_FG } from './theme';
+import { type LevelName, type LogAction, LogIntent, TABLE_COLUMNS_FG, TABLE_TITLE_FG } from './theme';
 
 export type Fields = Map<string, unknown> | Record<string, unknown>;
 export type Row = Fields;
@@ -316,17 +316,18 @@ export class LogActions {
     const hBorder = '+' + headers.map((h) => '-'.repeat(w(h) + 2)).join('+') + '+';
     const headerRow = '|' + headers.map((h) => ' ' + truncateCell(h).padEnd(w(h)) + ' ').join('|') + '|';
 
-    // The title and column-name rows are a darker shade of the table color (bold, like the rest). It is a
-    // foreground, so it follows fg; after it, the table's own style is restored (background included).
+    // The title row and the column-name row each have their own shade, both darker than the table body (bold, like
+    // the rest). They are foregrounds, so they follow fg; after each, the table's own style is restored (background
+    // included).
     const headerStyled = styled && config().fg;
-    const hdr = (line: string): string => (headerStyled ? TABLE_HEADER_FG + BOLD + line + color : line);
+    const shade = (fg: string, line: string): string => (headerStyled ? fg + BOLD + line + color : line);
 
     const out: string[] = [hBorder];
     if (title) {
-      out.push(hdr('|' + center(` ${title} `, headerRow.length - 2) + '|'));
+      out.push(shade(TABLE_TITLE_FG, '|' + center(` ${title} `, headerRow.length - 2) + '|'));
       out.push(hBorder);
     }
-    out.push(hdr(headerRow), hBorder);
+    out.push(shade(TABLE_COLUMNS_FG, headerRow), hBorder);
     for (const row of normalized) {
       const byKey = new Map(row);
       out.push('|' + headers.map((h) => ' ' + truncateCell(byKey.get(h) ?? '').padEnd(w(h)) + ' ').join('|') + '|');

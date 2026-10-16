@@ -255,7 +255,7 @@ One built-in theme (HIGH_CONTRAST). `resolveStyle(level, intent, action?)` = for
 - Background: constant `BG_BLACK` for every level (there is no per-level background).
 - `config().fg` false drops the foreground part; `config().bg` false drops the background; both false returns `''`.
 - `themed(level, intent, action?)` in `core.ts` returns `''` when `ansi` is off, else `resolveStyle`. The DEBUG copy made by INFO truncation reuses the original line's color unless it is a BASE line (which turns DEBUG grey).
-- Tables: the title row and the column-name row are wrapped as `TABLE_HEADER_FG + BOLD + line + color`, a darker shade of the table violet (4.66:1 on `#1e1e1e`, CIEDE2000 25.8 from the body), then the table's own style is restored so the background continues. Only when a style exists and `fg` is on (the header color is a foreground). Borders and data rows use the table color.
+- Tables: the title row is wrapped as `TABLE_TITLE_FG + BOLD + line + color` and the column-name row as `TABLE_COLUMNS_FG + BOLD + line + color`, then the table's own style is restored so the background continues. Both are darker than the body and differ from each other: the title is dark and saturated (4.66:1 on `#1e1e1e`, CIEDE2000 25.8 from the body), the columns a muted mid shade of the same hue (6.15:1; 15.6 from the body, 14.9 from the title). A more saturated column color would drift into the observe pinks; `palette.test.ts` checks all of this. Only when a style exists and `fg` is on (these are foregrounds). Borders and data rows use the table color.
 
 `ansi.ts` is a catalog and factory (`sgr`, `fg16`, `rgbFg`, ... named `FG_*`, `BG_*`, `RGB_FG`, ...), plus `stripAnsi` and `fgFromStyle`.
 

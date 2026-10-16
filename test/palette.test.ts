@@ -166,34 +166,58 @@ describe('fallbacks and prefixes', () => {
 describe('table header rows', () => {
   const tableLines = (): string[] => out.join('').split('\n').filter(Boolean);
 
-  it('titleAndColumnNames_useTheDarkerHeaderColor_dataRowsDoNot', async () => {
-    const { TABLE_HEADER_FG } = await import('../src');
+  it('titleRow_andColumnNameRow_eachHaveTheirOwnColor_dataRowsHaveNeither', async () => {
+    const { TABLE_TITLE_FG, TABLE_COLUMNS_FG } = await import('../src');
     out = [];
     info.table([{ id: 1, name: 'Ann' }], 'Users');
     const lines = tableLines();
     const titleLine = lines.find((l) => l.includes(' Users '))!;
-    const headerLine = lines.find((l) => l.includes(' id ') && l.includes(' name '))!;
+    const columnsLine = lines.find((l) => l.includes(' id ') && l.includes(' name '))!;
     const dataLine = lines.find((l) => l.includes(' Ann '))!;
-    expect(titleLine).toContain(TABLE_HEADER_FG + BOLD + '|');
-    expect(headerLine).toContain(TABLE_HEADER_FG + BOLD + '| id ');
-    expect(dataLine).not.toContain(TABLE_HEADER_FG);
-    // after the header part, the table style (with its background) is back for the rest of the line
-    expect(headerLine).toContain('|' + ACTION_FG.table + BOLD + BG_BLACK);
+    expect(titleLine).toContain(TABLE_TITLE_FG + BOLD + '|');
+    expect(titleLine).not.toContain(TABLE_COLUMNS_FG);
+    expect(columnsLine).toContain(TABLE_COLUMNS_FG + BOLD + '| id ');
+    expect(columnsLine).not.toContain(TABLE_TITLE_FG);
+    expect(dataLine).not.toContain(TABLE_TITLE_FG);
+    expect(dataLine).not.toContain(TABLE_COLUMNS_FG);
+    // after each header part, the table style (with its background) is back for the rest of the line
+    expect(titleLine).toContain('|' + ACTION_FG.table + BOLD + BG_BLACK);
+    expect(columnsLine).toContain('|' + ACTION_FG.table + BOLD + BG_BLACK);
   });
 
-  it('fgOff_noHeaderColor', async () => {
-    const { TABLE_HEADER_FG } = await import('../src');
+  it('untitledTable_onlyTheColumnRowIsShaded', async () => {
+    const { TABLE_TITLE_FG, TABLE_COLUMNS_FG } = await import('../src');
+    out = [];
+    info.log({ id: 1 }); // log(object): a table without a title row
+    expect(out.join('')).toContain(TABLE_COLUMNS_FG);
+    expect(out.join('')).not.toContain(TABLE_TITLE_FG);
+  });
+
+  it('fgOff_noHeaderColors', async () => {
+    const { TABLE_TITLE_FG, TABLE_COLUMNS_FG } = await import('../src');
     configure({ fg: false });
     out = [];
     info.table([{ id: 1 }], 'Users');
-    expect(out.join('')).not.toContain(TABLE_HEADER_FG);
+    expect(out.join('')).not.toContain(TABLE_TITLE_FG);
+    expect(out.join('')).not.toContain(TABLE_COLUMNS_FG);
   });
 
-  it('headerColor_isReadable_andClearlyDarkerThanTheBody', async () => {
-    const { TABLE_HEADER_FG } = await import('../src');
-    const [header, body] = [rgbOf(TABLE_HEADER_FG), rgbOf(ACTION_FG.table)];
-    expect(contrast(header, DARK_BG)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(header, DARK_BG)).toBeLessThan(contrast(body, DARK_BG)); // darker
-    expect(deltaE2000(header, body)).toBeGreaterThanOrEqual(20);
+  it('title_columns_body_areReadable_layeredDarkToLight_andClearlyApart', async () => {
+    const { TABLE_TITLE_FG, TABLE_COLUMNS_FG } = await import('../src');
+    const [title, columns, body] = [rgbOf(TABLE_TITLE_FG), rgbOf(TABLE_COLUMNS_FG), rgbOf(ACTION_FG.table)];
+    for (const c of [title, columns]) expect(contrast(c, DARK_BG)).toBeGreaterThanOrEqual(4.5);
+    // darker than the body: less contrast against a dark background
+    expect(contrast(title, DARK_BG)).toBeLessThan(contrast(columns, DARK_BG));
+    expect(contrast(columns, DARK_BG)).toBeLessThan(contrast(body, DARK_BG));
+    expect(deltaE2000(title, columns)).toBeGreaterThanOrEqual(12);
+    expect(deltaE2000(columns, body)).toBeGreaterThanOrEqual(12);
+    expect(deltaE2000(title, body)).toBeGreaterThanOrEqual(20);
+  });
+
+  it('columnColor_doesNotLookLikeAnObserveLine', async () => {
+    const { TABLE_COLUMNS_FG } = await import('../src');
+    for (const a of ['wait', 'search', 'result'] as const) {
+      expect(deltaE2000(rgbOf(TABLE_COLUMNS_FG), rgbOf(ACTION_FG[a])), a).toBeGreaterThanOrEqual(12);
+    }
   });
 });

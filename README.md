@@ -276,7 +276,7 @@ Every action has its own foreground color, so a `click` line and an `input` line
 | Alert | reds and oranges (`skip` is muted) | `failed`, `error`, `timeout`, `validation`, `fallback`, `skip` |
 
 - Plain `log` lines keep their level's color: INFO white, WARN amber, ERROR red, DEBUG grey. `failed` uses the same red as ERROR.
-- A table's title row and column-name row are a darker shade of the table's violet (`TABLE_HEADER_FG`), so the header stands apart from the data rows. Borders and data rows keep the table color. A title longer than the table widens the table instead of being cut.
+- Table headers are darker shades of the table's violet, one per row, so title, column names and data read as three layers: the title row is the darkest (`TABLE_TITLE_FG`), the column-name row a muted mid shade (`TABLE_COLUMNS_FG`), and borders and data rows keep the table color. A title longer than the table widens the table instead of being cut.
 - An action's color does not depend on the level: `warn.click()` and `info.click()` look the same, as before.
 - Every color has at least 4.5:1 contrast on a dark terminal background (`#1e1e1e`). Colors within one kind are at least 10 apart in CIEDE2000 color difference, and colors of different kinds at least 12, so neighbors stay distinguishable. A test enforces these limits.
 - The colors are 24-bit, so they need a truecolor terminal (VS Code, Windows Terminal, iTerm2 and most modern terminals). Each color is exported as `ACTION_FG`.

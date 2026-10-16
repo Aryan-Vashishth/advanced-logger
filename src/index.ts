@@ -32,7 +32,7 @@ export {
   detectAnsiSupport,
 } from './config';
 export type { LogConfig, LogConfigPatch, RootLevel, AttachPolicy, FileToggles } from './config';
-export { LogIntent, ACTION_FG, TABLE_HEADER_FG } from './theme';
+export { LogIntent, ACTION_FG, TABLE_TITLE_FG, TABLE_COLUMNS_FG } from './theme';
 export type { LevelName, LogAction } from './theme';
 export { stripAnsi, fgFromStyle } from './ansi';
 export { setTestContext, getTestContext } from './core';
